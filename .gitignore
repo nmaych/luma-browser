@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.local
+.DS_Store
+tsconfig.tsbuildinfo
+luma-src.zip
+.workbuddy-ai/
