@@ -166,7 +166,7 @@ npm run dist:dir
 
 - `dist/`：React 渲染层静态文件
 - `release/1.12.2/win-unpacked/`：可直接运行的免安装应用目录
-- `release/1.12.2/Luma-Browser-Setup-1.12.2.exe`：当前版本的 Windows 安装程序（118.9 MB，SHA256 `b983383961f378f19bb2f9ca1d9722495b0d58dc0ea62fc098d9ebb3dd81de88`）
+- `release/1.12.2/Luma-Browser-Setup-1.12.2.exe`：当前版本的 Windows 安装程序（GitHub Release 附件为 118.8 MB，SHA256 `7aeab29812149593c8b3bf6b546e19fd2064a81a058a37957e39f5c2e89c5854`）
 - `build/`：应用 PNG/ICO 图标
 
 每次构建成功后，脚本会自动删除旧版本遗留的 `win-unpacked` 免安装目录（保留各版本的安装程序），当前版本的免安装目录会保留用于冒烟验证。清理先用递归删除，失败时逐文件删除；仍被占用时会跳过并在下次构建重试，也可以手动执行 `npm run clean:release`。
