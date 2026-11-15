@@ -160,6 +160,10 @@ function permissionHost(origin: string): string {
   }
 }
 
+function updateLineLabel(state: LumaUpdateState): string {
+  return state.lines.find((line) => line.id === state.line)?.label ?? '';
+}
+
 function updateStatusText(state: LumaUpdateState | null, checking: boolean): string {
   if (!state) return checking ? '正在检查更新…' : '尚未检查更新';
   if (checking && state.status === 'idle') return '正在检查更新…';
@@ -167,17 +171,18 @@ function updateStatusText(state: LumaUpdateState | null, checking: boolean): str
     case 'checking':
       return '正在检查更新…';
     case 'available':
-      return `发现新版本 ${state.version}，正在准备下载…`;
-    case 'downloading':
-      return state.total > 0
-        ? `正在下载新版本 ${state.percent}%`
-        : '正在下载新版本…';
+      return `发现新版本 ${state.version}，选择线路后点击“下载更新”。`;
+    case 'downloading': {
+      const via = updateLineLabel(state);
+      const progress = state.total > 0 ? ` ${state.percent}%` : '';
+      return via ? `正在通过${via}下载新版本${progress}` : `正在下载新版本${progress}`;
+    }
     case 'downloaded':
       return `新版本 ${state.version} 已下载，重启后自动安装。`;
     case 'not-available':
       return '当前已是最新版本。';
     case 'error':
-      return state.error ? `更新检查失败：${state.error}` : '更新检查失败。';
+      return state.error ? `更新失败：${state.error}` : '更新失败。';
     default:
       return '尚未检查更新';
   }
@@ -243,6 +248,7 @@ export function SettingsPage({
   const [appVersions, setAppVersions] = useState<LumaAppVersions | null>(null);
   const [updateState, setUpdateState] = useState<LumaUpdateState | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateLine, setUpdateLine] = useState('github');
   const engines = getAllSearchEngines(preferences.customSearchEngines);
   const currentEngine = engines.find((engine) => engine.id === preferences.searchEngine) ?? engines[0];
   const builtInHome = preferences.homePage === INTERNAL_ROUTES.home;
@@ -405,6 +411,23 @@ export function SettingsPage({
       setCheckingUpdate(false);
     }
   };
+
+  const downloadUpdate = async () => {
+    if (!desktop?.downloadUpdate) return;
+    try {
+      const value = await desktop.downloadUpdate(updateLine);
+      if (value) setUpdateState(value);
+    } catch {
+      // The state stream reports download failures.
+    }
+  };
+
+  useEffect(() => {
+    const lines = updateState?.lines ?? [];
+    if (lines.length > 0 && !lines.some((line) => line.id === updateLine)) {
+      setUpdateLine(lines[0].id);
+    }
+  }, [updateState, updateLine]);
 
   useEffect(() => {
     if (!recording) return undefined;
@@ -676,7 +699,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.12.4'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.12.5'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -1270,7 +1293,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.12.4'}</span>
+                    <span>版本 {appVersions?.app ?? '1.12.5'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>
@@ -1304,11 +1327,35 @@ export function SettingsPage({
                       >
                         <Download size={16} /> 重启并安装
                       </button>
+                    ) : (updateState?.status === 'available'
+                      || updateState?.status === 'downloading'
+                      || (updateState?.status === 'error' && (updateState?.lines.length ?? 0) > 0)) ? (
+                      <div className="update-actions">
+                        <select
+                          className="settings-select"
+                          aria-label="下载线路"
+                          value={updateLine}
+                          disabled={updateState?.status === 'downloading'}
+                          onChange={(event) => setUpdateLine(event.target.value)}
+                        >
+                          {(updateState?.lines ?? []).map((line) => (
+                            <option key={line.id} value={line.id}>{line.label}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={updateState?.status === 'downloading'}
+                          onClick={() => void downloadUpdate()}
+                        >
+                          <Download size={16} /> {updateState?.status === 'downloading' ? '正在下载…' : '下载更新'}
+                        </button>
+                      </div>
                     ) : (
                       <button
                         className="secondary-button"
                         type="button"
-                        disabled={checkingUpdate || updateState?.status === 'downloading'}
+                        disabled={checkingUpdate}
                         onClick={() => void checkForUpdates()}
                       >
                         <RefreshCw size={16} /> {checkingUpdate ? '正在检查…' : '检查更新'}
@@ -1319,6 +1366,14 @@ export function SettingsPage({
                     <div className="update-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={updateState.percent}>
                       <span style={{ width: `${Math.max(2, updateState.percent)}%` }} />
                     </div>
+                  )}
+                  {updateLine === 'mirror'
+                    && (updateState?.status === 'available'
+                      || updateState?.status === 'downloading'
+                      || (updateState?.status === 'error' && (updateState?.lines.length ?? 0) > 0)) && (
+                    <p className="update-hint">
+                      镜像线路由第三方加速服务提供，下载完成后会按 GitHub 公布的 SHA256 校验；校验不一致时文件会被删除。
+                    </p>
                   )}
                 </div>
                 <div className="settings-card">

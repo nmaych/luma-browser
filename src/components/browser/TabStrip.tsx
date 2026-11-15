@@ -133,6 +133,15 @@ export function TabStrip(props: TabStripProps) {
     if (!props.showPreviews) clearHoverPreview();
   }, [props.showPreviews]);
 
+  // Closing the hovered tab (its close button, Ctrl+W, or another action) never
+  // fires mouseleave, so the preview card would stay on screen afterwards.
+  useEffect(() => {
+    const native = nativePreview.current;
+    const stillOpen = props.tabs.some((tab) => tab.id === (hoverPreview?.tabId ?? native?.tabId));
+    if ((hoverPreview || native) && !stillOpen) clearHoverPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tabs]);
+
   useEffect(() => {
     const current = nativePreview.current;
     if (!current || !props.onShowPreview) return;
@@ -511,7 +520,7 @@ export function TabStrip(props: TabStripProps) {
                 className="browser-tab__close"
                 size="small"
                 label={`关闭 ${entry.title}`}
-                onClick={() => props.onClose(tab.id)}
+                onClick={() => { clearHoverPreview(); props.onClose(tab.id); }}
               >
                 <X size={14} />
               </IconButton>

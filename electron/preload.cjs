@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   getAppVersions: () => ipcRenderer.invoke('app:versions'),
   getUpdateState: () => ipcRenderer.invoke('updates:state'),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
-  downloadUpdate: () => ipcRenderer.invoke('updates:download'),
+  downloadUpdate: (line) => ipcRenderer.invoke('updates:download', line),
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state);

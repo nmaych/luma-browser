@@ -60,6 +60,11 @@ type LumaUpdateStatus =
   | 'downloaded'
   | 'error';
 
+interface LumaUpdateLine {
+  id: string;
+  label: string;
+}
+
 interface LumaUpdateState {
   status: LumaUpdateStatus;
   currentVersion: string;
@@ -69,6 +74,8 @@ interface LumaUpdateState {
   total: number;
   error: string | null;
   releaseUrl: string;
+  line: string | null;
+  lines: LumaUpdateLine[];
 }
 
 interface LumaAdblockState {
@@ -185,7 +192,7 @@ interface LumaDesktopApi {
   getAppVersions: () => Promise<LumaAppVersions>;
   getUpdateState: () => Promise<LumaUpdateState | null>;
   checkForUpdates: () => Promise<LumaUpdateState | null>;
-  downloadUpdate: () => Promise<LumaUpdateState | null>;
+  downloadUpdate: (line?: string) => Promise<LumaUpdateState | null>;
   installUpdate: () => Promise<boolean>;
   onUpdateState: (callback: (state: LumaUpdateState) => void) => () => void;
   openIncognito: () => void;

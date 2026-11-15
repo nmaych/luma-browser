@@ -1,4 +1,5 @@
 const { app, net } = require('electron');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -16,6 +17,14 @@ const ALLOWED_HOSTS = [
   'api.github.com',
   'objects.githubusercontent.com',
   'github-releases.githubusercontent.com',
+];
+// Downloads can stall on networks where github.com is unreachable. The mirror
+// only ever proxies the official asset URL and its output is checked against
+// the SHA256 GitHub publishes for that asset.
+const MIRROR_PREFIX = 'https://gh-proxy.com/';
+const DOWNLOAD_LINES = [
+  { id: 'github', label: 'GitHub 直连' },
+  { id: 'mirror', label: '镜像加速' },
 ];
 
 function isTrustedDownloadUrl(value) {
@@ -54,9 +63,13 @@ function createUpdater({ currentVersion, onState }) {
     total: 0,
     error: null,
     releaseUrl: `https://github.com/${REPO}/releases`,
+    line: null,
+    lines: [],
   };
   /** @type {string | null} */
   let installerPath = null;
+  /** @type {{ version: string, url: string, size: number, notes: string, releaseUrl: string } | null} */
+  let latestRelease = null;
   let downloadRequest = null;
   let checking = false;
   let downloading = false;
@@ -154,14 +167,51 @@ function createUpdater({ currentVersion, onState }) {
     return path.join(app.getPath('temp'), `Luma-Browser-Setup-${safeVersion}.exe`);
   }
 
-  function startDownload(release) {
-    if (downloading) return Promise.resolve({ ...state });
+  /** SHA256 GitHub publishes for the release asset, used to vet mirror copies. */
+  async function assetDigest(version) {
+    try {
+      const response = await net.fetch(RELEASE_API, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': userAgent,
+        },
+      });
+      if (!response.ok) return null;
+      const release = await response.json();
+      const tag = String(release?.tag_name || release?.name || '').replace(/^v/i, '').trim();
+      if (tag !== version) return null;
+      const assets = Array.isArray(release?.assets) ? release.assets : [];
+      const asset = assets.find((item) => /^Luma-Browser-Setup-.*\.exe$/i.test(item?.name || ''));
+      const digest = String(asset?.digest || '');
+      return /^sha256:[0-9a-f]{64}$/i.test(digest) ? digest.slice(7).toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function startDownload(release, lineId = 'github') {
+    if (downloading) return { ...state };
+    const line = DOWNLOAD_LINES.some((item) => item.id === lineId) ? lineId : 'github';
+    if (!isTrustedDownloadUrl(release.url)) {
+      return publish({ status: 'error', error: '下载地址不受信任' });
+    }
+    let expectedDigest = null;
+    let url = release.url;
+    if (line === 'mirror') {
+      expectedDigest = await assetDigest(release.version);
+      if (!expectedDigest) {
+        return publish({ status: 'error', error: '无法获取安装包校验值，请改用 GitHub 直连' });
+      }
+      url = `${MIRROR_PREFIX}${release.url}`;
+    }
     downloading = true;
     installerPath = installerFileFor(release.version);
     publish({
       status: 'downloading',
       version: release.version,
       releaseUrl: release.releaseUrl,
+      line,
+      lines: DOWNLOAD_LINES,
       percent: 0,
       transferred: 0,
       total: release.size,
@@ -181,7 +231,7 @@ function createUpdater({ currentVersion, onState }) {
       let request;
       try {
         fs.mkdirSync(path.dirname(installerPath), { recursive: true });
-        request = net.request({ url: release.url, method: 'GET', redirect: 'follow' });
+        request = net.request({ url, method: 'GET', redirect: 'follow' });
       } catch (error) {
         finish({ status: 'error', error: error instanceof Error ? error.message : 'download failed' });
         return;
@@ -201,6 +251,7 @@ function createUpdater({ currentVersion, onState }) {
         const total = Number(response.headers['content-length']) || release.size || 0;
         let transferred = 0;
         let lastBroadcast = 0;
+        const hasher = crypto.createHash('sha256');
         const file = fs.createWriteStream(installerPath);
         file.on('error', (error) => {
           finish({ status: 'error', error: error.message });
@@ -216,6 +267,7 @@ function createUpdater({ currentVersion, onState }) {
           } catch {
             return;
           }
+          hasher.update(chunk);
           transferred += chunk.length;
           const now = Date.now();
           if (now - lastBroadcast > 300) {
@@ -232,6 +284,16 @@ function createUpdater({ currentVersion, onState }) {
           file.end(() => {
             if (!installerPath || !fs.existsSync(installerPath)) {
               finish({ status: 'error', error: 'download incomplete' });
+              return;
+            }
+            const digest = hasher.digest('hex');
+            if (expectedDigest && digest !== expectedDigest) {
+              try {
+                fs.unlinkSync(installerPath);
+              } catch {
+                // The download is discarded regardless.
+              }
+              finish({ status: 'error', error: '安装包校验失败，文件已删除，请更换线路重试' });
               return;
             }
             finish({
@@ -251,7 +313,7 @@ function createUpdater({ currentVersion, onState }) {
     });
   }
 
-  async function check({ autoDownload = true } = {}) {
+  async function check({ autoDownload = false } = {}) {
     if (!app.isPackaged) {
       return publish({ status: 'error', error: '仅安装版支持自动更新' });
     }
@@ -263,20 +325,32 @@ function createUpdater({ currentVersion, onState }) {
       if (!release) {
         // GitHub answered but has no published release; the installed build is
         // already the newest one that can be distributed.
-        return publish({ status: 'not-available', version: null, error: null });
+        latestRelease = null;
+        return publish({ status: 'not-available', version: null, lines: [], line: null, error: null });
       }
       if (!isNewerVersion(release.version, currentVersion)) {
-        return publish({ status: 'not-available', version: release.version, releaseUrl: release.releaseUrl, error: null });
+        latestRelease = null;
+        return publish({
+          status: 'not-available',
+          version: release.version,
+          releaseUrl: release.releaseUrl,
+          lines: [],
+          line: null,
+          error: null,
+        });
       }
+      latestRelease = release;
       publish({
         status: 'available',
         version: release.version,
         releaseUrl: release.releaseUrl,
         total: release.size,
         percent: 0,
+        lines: DOWNLOAD_LINES,
+        line: null,
         error: null,
       });
-      if (autoDownload) return startDownload(release);
+      if (autoDownload) return await startDownload(release);
       return { ...state };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -291,12 +365,20 @@ function createUpdater({ currentVersion, onState }) {
     }
   }
 
-  function download() {
+  function download(line = 'github') {
     if (downloading) return Promise.resolve({ ...state });
     if (state.status === 'downloaded') return Promise.resolve({ ...state });
-    if (!state.version) return check({ autoDownload: true });
+    const lineId = DOWNLOAD_LINES.some((item) => item.id === line) ? line : 'github';
+    if (!state.version) return check({ autoDownload: false });
+    if (latestRelease && latestRelease.version === state.version) {
+      return startDownload(latestRelease, lineId);
+    }
     return fetchLatestRelease()
-      .then((release) => (release ? startDownload(release) : publish({ status: 'error', error: '未找到可下载的安装包' })))
+      .then((release) => {
+        if (!release) return publish({ status: 'error', error: '未找到可下载的安装包' });
+        latestRelease = release;
+        return startDownload(release, lineId);
+      })
       .catch((error) => publish({ status: 'error', error: error?.message || '下载失败' }));
   }
 

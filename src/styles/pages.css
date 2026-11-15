@@ -269,6 +269,9 @@
 .settings-card__header h3 { font-size: 14px; }
 .update-progress { height: 6px; overflow: hidden; border-radius: 999px; background: var(--surface-soft); }
 .update-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 260ms ease; }
+.update-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; }
+.update-actions .settings-select { min-width: 128px; }
+.update-hint { margin: 12px 0 0; color: var(--text-muted); font-size: 10px; line-height: 1.6; }
 .settings-card .theme-options { margin: 0; }
 .theme-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .theme-options > button { position: relative; padding: 7px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }

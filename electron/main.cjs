@@ -1683,9 +1683,10 @@ app.whenReady().then(() => {
     onState: broadcastUpdateState,
   });
   if (!isDevelopment) {
-    // Checking after the first paint keeps startup fast and offline-safe.
+    // Checking after the first paint keeps startup fast and offline-safe. It
+    // only looks for a release; downloading waits for an explicit click.
     startupUpdateTimer = setTimeout(() => {
-      void updateManager?.check({ autoDownload: true });
+      void updateManager?.check({ autoDownload: false });
     }, 8_000);
   }
   adblockManager = new AdblockManager({
@@ -2539,12 +2540,12 @@ function broadcastUpdateState(snapshot) {
 
 ipcMain.handle('updates:state', () => updateManager?.getState() ?? null);
 ipcMain.handle('updates:check', () => {
-  // The download can take minutes; report the state immediately and let
-  // progress arrive through 'updates:state'.
-  void updateManager?.check({ autoDownload: true })?.catch(() => undefined);
+  // Checking never starts the download: the settings page shows a download
+  // button (with a choice of routes) once a newer version is known.
+  void updateManager?.check({ autoDownload: false })?.catch(() => undefined);
   return updateManager?.getState() ?? null;
 });
-ipcMain.handle('updates:download', () => updateManager?.download() ?? null);
+ipcMain.handle('updates:download', (_event, line) => updateManager?.download(line) ?? null);
 ipcMain.handle('updates:install', () => updateManager?.install() ?? false);
 
 ipcMain.handle('app:versions', () => ({
