@@ -151,14 +151,19 @@ function hostContentsOf(contents) {
  */
 function appTabBarAtPoint(point, exclude, incognito, alsoExclude = null) {
   if (!point) return null;
+  // Callers pass both renderer points ({ screenX, screenY }) and OS cursor
+  // points ({ x, y }); reading only one shape hit every window at once.
+  const x = Number(point.screenX ?? point.x);
+  const y = Number(point.screenY ?? point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   const matches = [];
   for (const [win, meta] of appWindows) {
     if (win.isDestroyed() || win === exclude || win === alsoExclude) continue;
     if (Boolean(meta.incognito) !== Boolean(incognito)) continue;
     const bounds = win.getContentBounds();
-    if (point.screenX < bounds.x || point.screenX > bounds.x + bounds.width) continue;
+    if (x < bounds.x || x > bounds.x + bounds.width) continue;
     // Only the tab bar counts as a merge target; the page area creates a window.
-    if (point.screenY < bounds.y || point.screenY > bounds.y + TAB_BAR_HEIGHT) continue;
+    if (y < bounds.y || y > bounds.y + TAB_BAR_HEIGHT) continue;
     matches.push(win);
   }
   if (matches.length === 0) return null;
