@@ -92,6 +92,10 @@ function RestoreWindowIcon() {
 export function TabStrip(props: TabStripProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenu | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
+  // dragstart fires only after the pointer moved; the grab point is where the
+  // button went down. Deriving it from the drag event makes the window lag
+  // behind the cursor by the drag threshold.
+  const dragOrigin = useRef<{ x: number; y: number } | null>(null);
   const draggingRef = useRef(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -229,13 +233,18 @@ export function TabStrip(props: TabStripProps) {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', id);
     event.dataTransfer.setData('application/x-luma-item', 'tab');
-    dragOffset.current = { x: Math.round(event.clientX), y: Math.round(event.clientY) };
+    const origin = dragOrigin.current;
+    dragOrigin.current = null;
+    dragOffset.current = {
+      x: Math.round(origin?.x ?? event.clientX),
+      y: Math.round(origin?.y ?? event.clientY),
+    };
     // The window is created now, on press-and-move, not on release.
     props.onTearOffStart?.(id, {
       screenX: Math.round(window.screenX + event.clientX),
       screenY: Math.round(window.screenY + event.clientY),
-      offsetX: Math.round(event.clientX),
-      offsetY: Math.round(event.clientY),
+      offsetX: dragOffset.current.x,
+      offsetY: dragOffset.current.y,
     });
   };
 
@@ -431,6 +440,10 @@ export function TabStrip(props: TabStripProps) {
                 }
                 clearHoverPreview();
                 openContextMenu(event, tab.id);
+              }}
+              onMouseDown={(event) => {
+                if (event.button !== 0) return;
+                dragOrigin.current = { x: event.clientX, y: event.clientY };
               }}
               onDragStart={(event) => { clearHoverPreview(); handleDragStart(event, tab.id); }}
               onDrag={(event) => {

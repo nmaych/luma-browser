@@ -5,6 +5,10 @@ const { spawn } = require('node:child_process');
 
 const REPO = 'nmaych/luma-browser';
 const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
+// The public releases page lists published releases only (drafts stay hidden)
+// and is not subject to the REST API's unauthenticated rate limit, which
+// answers 403 once the shared IP has spent its hourly quota.
+const RELEASES_PAGE = `https://github.com/${REPO}/releases`;
 // Releases are the only trusted source; a compromised redirect should never be
 // able to point the installer somewhere else.
 const ALLOWED_HOSTS = [
@@ -67,11 +71,53 @@ function createUpdater({ currentVersion, onState }) {
     return { ...state };
   };
 
-  async function fetchLatestRelease() {
+  const userAgent = `Luma-Browser/${currentVersion}`;
+
+  /**
+   * Resolves the latest release from the HTML releases page. `fallback` asks
+   * the caller to consult the REST API: a tag exists but the constructed asset
+   * URL did not answer, which usually means the release names its files
+   * differently. An empty list is authoritative — nothing is published yet.
+   */
+  async function releaseFromPage() {
+    const response = await net.fetch(RELEASES_PAGE, {
+      headers: { Accept: 'text/html', 'User-Agent': userAgent },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    // Releases are listed newest first, so the first tag link is the latest.
+    const match = /\/releases\/tag\/([^"'?#/]+)/.exec(html);
+    if (!match) return { release: null, fallback: false };
+    const tag = decodeURIComponent(match[1]);
+    const version = tag.replace(/^v/i, '');
+    if (!parseVersion(version)) return { release: null, fallback: true };
+    const url = `https://github.com/${REPO}/releases/download/${encodeURIComponent(tag)}/Luma-Browser-Setup-${version}.exe`;
+    if (!isTrustedDownloadUrl(url)) return { release: null, fallback: true };
+    // The installer is named after the version by our release workflow; the
+    // probe confirms it exists and gives the progress bar its total size.
+    const head = await net.fetch(url, {
+      method: 'HEAD',
+      headers: { 'User-Agent': userAgent },
+    });
+    if (!head.ok) return { release: null, fallback: true };
+    return {
+      release: {
+        version,
+        url,
+        size: Number(head.headers.get('content-length')) || 0,
+        notes: '',
+        releaseUrl: `https://github.com/${REPO}/releases/tag/${encodeURIComponent(tag)}`,
+      },
+      fallback: false,
+    };
+  }
+
+  /** Fallback for a changed download name: the REST API lists the assets. */
+  async function releaseFromApi() {
     const response = await net.fetch(RELEASE_API, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': `Luma-Browser/${currentVersion}`,
+        'User-Agent': userAgent,
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -90,6 +136,17 @@ function createUpdater({ currentVersion, onState }) {
       notes: typeof release.body === 'string' ? release.body.slice(0, 4000) : '',
       releaseUrl: typeof release.html_url === 'string' ? release.html_url : state.releaseUrl,
     };
+  }
+
+  async function fetchLatestRelease() {
+    try {
+      const result = await releaseFromPage();
+      if (result.release) return result.release;
+      if (!result.fallback) return null;
+    } catch {
+      // A blocked or renamed page falls through to the REST API.
+    }
+    return releaseFromApi();
   }
 
   function installerFileFor(version) {
@@ -204,7 +261,9 @@ function createUpdater({ currentVersion, onState }) {
     try {
       const release = await fetchLatestRelease();
       if (!release) {
-        return publish({ status: 'error', error: '无法读取更新信息' });
+        // GitHub answered but has no published release; the installed build is
+        // already the newest one that can be distributed.
+        return publish({ status: 'not-available', version: null, error: null });
       }
       if (!isNewerVersion(release.version, currentVersion)) {
         return publish({ status: 'not-available', version: release.version, releaseUrl: release.releaseUrl, error: null });
@@ -221,7 +280,12 @@ function createUpdater({ currentVersion, onState }) {
       return { ...state };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return publish({ status: 'error', error: message === 'fetch failed' ? '更新服务器连接失败' : message });
+      const friendly = message === 'fetch failed'
+        ? '更新服务器连接失败'
+        : /^HTTP 403\b/.test(message)
+          ? '更新服务器繁忙，请稍后再试'
+          : message;
+      return publish({ status: 'error', error: friendly });
     } finally {
       checking = false;
     }

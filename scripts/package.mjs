@@ -11,6 +11,10 @@ const args = [
   '--win',
   directoryOnly ? '--dir' : 'nsis',
   '--x64',
+  // On CI a tag build is published implicitly by default; uploading is the
+  // release workflow's job and it has no electron-builder token of its own.
+  '--publish',
+  'never',
   `--config.directories.output=release/${version}`,
 ];
 

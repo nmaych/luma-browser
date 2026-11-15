@@ -9,7 +9,7 @@
 Windows 安装包构建完成后位于：
 
 ```text
-release/1.12.1/Luma-Browser-Setup-1.12.1.exe
+release/1.12.2/Luma-Browser-Setup-1.12.2.exe
 ```
 
 双击安装程序即可完成安装。安装程序支持选择安装目录，并会创建桌面与开始菜单快捷方式，无需管理员权限。
@@ -165,8 +165,8 @@ npm run dist:dir
 输出目录：
 
 - `dist/`：React 渲染层静态文件
-- `release/1.12.1/win-unpacked/`：可直接运行的免安装应用目录
-- `release/1.12.1/Luma-Browser-Setup-1.12.1.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `5EFAB3D5F0615DEEEFB5BC3B24BF7470BA69770E3732A76C958028C0AB22DF13`）
+- `release/1.12.2/win-unpacked/`：可直接运行的免安装应用目录
+- `release/1.12.2/Luma-Browser-Setup-1.12.2.exe`：当前版本的 Windows 安装程序（118.9 MB，SHA256 `b983383961f378f19bb2f9ca1d9722495b0d58dc0ea62fc098d9ebb3dd81de88`）
 - `build/`：应用 PNG/ICO 图标
 
 每次构建成功后，脚本会自动删除旧版本遗留的 `win-unpacked` 免安装目录（保留各版本的安装程序），当前版本的免安装目录会保留用于冒烟验证。清理先用递归删除，失败时逐文件删除；仍被占用时会跳过并在下次构建重试，也可以手动执行 `npm run clean:release`。

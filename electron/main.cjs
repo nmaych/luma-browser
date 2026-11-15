@@ -1978,6 +1978,9 @@ ipcMain.handle('tab-preview:show', (event, payload) => {
     tabPreviewWindow.on('closed', () => { tabPreviewWindow = null; });
   }
   const preview = tabPreviewWindow;
+  // The card is decoration: a hover that lingers after the pointer leaves the
+  // tab must never swallow clicks meant for the window underneath.
+  preview.setIgnoreMouseEvents(true);
   preview.setSize(width, height);
   const content = owner.getContentBounds();
   const x = Math.round(content.x + (Number(payload?.x) || 0));
@@ -2081,11 +2084,16 @@ ipcMain.handle('window:begin-tab-drag', (event, payload) => {
   const pageWidth = Math.max(240, Math.min(3840, Math.round(Number(payload?.size?.width) || 900)));
   const pageHeight = Math.max(200, Math.min(2160, Math.round(Number(payload?.size?.height) || 640)));
   const chrome = TAB_BAR_HEIGHT + NAV_BAR_HEIGHT;
-  // The pointer stays over the tab it grabbed, exactly like a real window would.
-  // Offsets are measured against the content area, so a window border can never
-  // shift the page under the cursor.
-  const offsetX = Math.max(0, Math.min(pageWidth - 24, Math.round(cursor.x - sourceContent.x)));
-  const offsetY = Math.max(0, Math.min(TAB_BAR_HEIGHT - 1, Math.round(cursor.y - sourceContent.y)));
+  // The pointer stays over the point where the tab was grabbed, exactly like a
+  // real window would. The renderer reports that mousedown point; deriving it
+  // from the cursor at dragstart would make the window trail the pointer by
+  // however far it moved before the drag began.
+  const grabX = Number(payload?.offset?.x);
+  const grabY = Number(payload?.offset?.y);
+  const originX = Number.isFinite(grabX) ? grabX : cursor.x - sourceContent.x;
+  const originY = Number.isFinite(grabY) ? grabY : cursor.y - sourceContent.y;
+  const offsetX = Math.max(0, Math.min(pageWidth - 24, Math.round(originX)));
+  const offsetY = Math.max(0, Math.min(TAB_BAR_HEIGHT - 1, Math.round(originY)));
   const incognito = Boolean(appWindows.get(source)?.incognito);
 
   let follower = null;
