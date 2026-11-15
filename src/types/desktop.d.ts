@@ -289,6 +289,7 @@ interface LumaDesktopApi {
   importBookmarks: () => Promise<LumaBookmarkFileResult>;
   exportBookmarks: (content: string, suggestedName: string) => Promise<LumaBookmarkFileResult>;
   minimize: () => void;
+  focusUi: () => void;
   toggleMaximize: () => void;
   close: () => void;
   isMaximized: () => Promise<boolean>;

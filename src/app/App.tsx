@@ -221,6 +221,9 @@ export function App() {
     || reader !== null
     || tabOverlayOpen,
   );
+  // Menus open for a moment; the page under them should keep moving so it does
+  // not look frozen. Dialogs and panels can sit on one still frame.
+  const livePageOverlay = Boolean(navMenuOpen || pageContext || tabOverlayOpen);
   const activeNativeNav = nativeNavigation[browser.activeTabId];
   const activeHost = getHost(browser.activeEntry.url).toLowerCase();
   const activeReaderFont = READER_FONTS.find((font) => font.id === readerFontFamily) ?? READER_FONTS[0];
@@ -1919,6 +1922,7 @@ export function App() {
               incognito={isIncognito}
               visible={showDesktopWeb}
               covered={pageCovered}
+              livePreview={livePageOverlay}
               insetTop={findOpen ? 52 : 0}
               insetRight={devtoolsOpen && showDesktopWeb ? devtoolsWidth + 6 : 0}
               suspendedTabId={draggingTabId}

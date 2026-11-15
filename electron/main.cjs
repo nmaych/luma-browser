@@ -1745,6 +1745,12 @@ ipcMain.on('window:toggle-maximize', (event) => {
 });
 ipcMain.handle('window:cursor-point', () => screen.getCursorScreenPoint());
 ipcMain.handle('window:id', (event) => BrowserWindow.fromWebContents(event.sender)?.id ?? 0);
+// A context menu opened on the page leaves keyboard focus in the page view, so
+// Escape and friends never reach the chrome. Hand focus back to the renderer.
+ipcMain.on('window:focus-ui', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.webContents.focus();
+});
 ipcMain.on('window:close', (event) => BrowserWindow.fromWebContents(event.sender)?.close());
 ipcMain.on('window:open-incognito', () => createWindow({ incognito: true }));
 ipcMain.on('window:open-downloads', () => openDownloadsWindow());

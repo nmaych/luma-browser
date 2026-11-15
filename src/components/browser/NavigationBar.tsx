@@ -90,10 +90,6 @@ export function NavigationBar(props: NavigationBarProps) {
 
   // The page is a native view above the HTML layer, so any popover has to make
   // the page step aside while it is open.
-  const anyPopoverOpen = menuOpen || recentOpen || shieldOpen || translateOpen || screenshotOpen || passwordsOpen;
-  useEffect(() => {
-    props.onMenuOpenChange?.(anyPopoverOpen);
-  }, [anyPopoverOpen]);
   const suggestions = useMemo(() => {
     const keyword = address.trim().toLowerCase();
     if (!props.showSuggestions || !keyword) return [];
@@ -109,7 +105,7 @@ export function NavigationBar(props: NavigationBarProps) {
   useEffect(() => {
     setActiveSuggestion(-1);
   }, [address, props.entry.url, props.showSuggestions]);
-  const { onContextMenu: openInputMenu, inputContextMenu } = useInputContextMenu({
+  const { onContextMenu: openInputMenu, inputContextMenu, inputContextMenuOpen } = useInputContextMenu({
     value: address,
     onChange: setAddress,
     onGo: (value) => {
@@ -117,6 +113,36 @@ export function NavigationBar(props: NavigationBarProps) {
     },
     label: '地址栏选项',
   });
+  const anyPopoverOpen = menuOpen
+    || recentOpen
+    || shieldOpen
+    || translateOpen
+    || screenshotOpen
+    || passwordsOpen
+    || suggestionsOpen
+    || inputContextMenuOpen;
+  useEffect(() => {
+    props.onMenuOpenChange?.(anyPopoverOpen);
+  }, [anyPopoverOpen]);
+  // The native page keeps keyboard focus while it is parked, so Escape would
+  // never reach these popovers without an explicit handler here.
+  useEffect(() => {
+    if (!anyPopoverOpen) return undefined;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setMenuOpen(false);
+      setRecentOpen(false);
+      setShieldOpen(false);
+      setTranslateOpen(false);
+      setScreenshotOpen(false);
+      setPasswordsOpen(false);
+      setIsFocused(false);
+      setActiveSuggestion(-1);
+      (document.activeElement as HTMLElement | null)?.blur();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [anyPopoverOpen]);
 
   useEffect(() => {
     setAddress(displayUrl(props.entry.url));

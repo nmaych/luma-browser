@@ -317,7 +317,10 @@ function createPageViewManager({ partition, preloadPath, onEvent, onCreated }) {
         return true;
       }
       case 'captureSnapshot': {
-        // A still frame keeps the page visible while an HTML overlay covers it.
+        // A frame keeps the page visible while an HTML overlay covers it. The
+        // live preview asks for JPEG: at several frames per second the PNG data
+        // URL would cost far more to encode and decode.
+        const options = args[0] && typeof args[0] === 'object' ? args[0] : {};
         const image = await wc.capturePage();
         if (!image || image.isEmpty()) return null;
         const size = image.getSize();
@@ -325,6 +328,10 @@ function createPageViewManager({ partition, preloadPath, onEvent, onCreated }) {
         const scaled = scale < 1
           ? image.resize({ width: Math.round(size.width * scale), quality: 'good' })
           : image;
+        if (options.jpeg) {
+          const quality = Math.min(100, Math.max(20, Math.round(Number(options.quality) || 60)));
+          return `data:image/jpeg;base64,${scaled.toJPEG(quality).toString('base64')}`;
+        }
         return scaled.toDataURL();
       }
       case 'edit': {

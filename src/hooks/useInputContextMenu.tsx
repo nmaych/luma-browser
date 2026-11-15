@@ -112,6 +112,7 @@ export function useInputContextMenu({ value, onChange, onGo, label = '输入框�
 
   return {
     onContextMenu: handleContextMenu,
+    inputContextMenuOpen: Boolean(menu),
     inputContextMenu: menu ? (
       <ContextMenu x={menu.x} y={menu.y} items={items} label={label} onClose={() => setMenu(null)} />
     ) : null,

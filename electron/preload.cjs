@@ -103,6 +103,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   importBookmarks: () => ipcRenderer.invoke('bookmarks:import-file'),
   exportBookmarks: (content, suggestedName) => ipcRenderer.invoke('bookmarks:export-file', content, suggestedName),
   minimize: () => ipcRenderer.send('window:minimize'),
+  focusUi: () => ipcRenderer.send('window:focus-ui'),
   toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
   close: () => ipcRenderer.send('window:close'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),

@@ -42,6 +42,9 @@ export function ContextMenu({ x, y, items, label = '操作菜单', onClose }: Co
     window.addEventListener('resize', handleResize);
     window.addEventListener('blur', handleResize);
     window.addEventListener('keydown', handleKeydown);
+    // The menu is often opened by right-clicking the native page, which leaves
+    // keyboard focus there; pull it back so Escape and arrow keys work.
+    window.lumaDesktop?.focusUi?.();
     const firstItem = menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
     firstItem?.focus({ preventScroll: true });
     return () => {
