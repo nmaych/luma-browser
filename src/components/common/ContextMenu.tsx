@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlaySurface } from '../../hooks/useOverlaySurface';
 
 export interface ContextMenuAction {
   id: string;
@@ -24,6 +25,10 @@ interface ContextMenuProps {
 export function ContextMenu({ x, y, items, label = '操作菜单', onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x, y });
+  // Right-clicking the page keeps the menu above it through a transparent
+  // mirrored view instead of parking the page.
+  useOverlaySurface(menuRef, true);
+  useEffect(() => window.lumaDesktop?.overlay?.onOutside(onClose), [onClose]);
 
   useLayoutEffect(() => {
     const rect = menuRef.current?.getBoundingClientRect();

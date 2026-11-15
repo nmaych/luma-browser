@@ -63,6 +63,7 @@ import { matchShortcutEvent } from '../utils/shortcuts';
 import { readStorage, writeStorage } from '../utils/storage';
 import { INTERNAL_ROUTES, getHost, getInternalPage, isExternalUrl } from '../utils/url';
 import { useBrowser } from './useBrowser';
+import { setNativePageVisible } from '../hooks/useNativePageVisible';
 
 interface NativeNavigationState {
   canGoBack: boolean;
@@ -206,12 +207,12 @@ export function App() {
   const internalPage = getInternalPage(browser.activeEntry.url);
   const isExternalPage = !internalPage && isExternalUrl(browser.activeEntry.url);
   const showDesktopWeb = isDesktop && isExternalPage && !browser.activeTab.error;
-  // Pages are native views that always sit above the HTML layer. Any overlay
-  // that has to appear over the page swaps in a still frame and hides the view.
+  // Pages are native views that always sit above the HTML layer. Popovers are
+  // mirrored into a transparent surface above the page; only panels and dialogs
+  // still park the view and stand in with a still frame.
   const pageCovered = Boolean(
     navMenuOpen
     || browser.activePanel
-    || pageContext
     || tabOverviewOpen
     || bookmarkDialog.open
     || translationConsentOpen
@@ -221,9 +222,6 @@ export function App() {
     || reader !== null
     || tabOverlayOpen,
   );
-  // Menus open for a moment; the page under them should keep moving so it does
-  // not look frozen. Dialogs and panels can sit on one still frame.
-  const livePageOverlay = Boolean(navMenuOpen || pageContext || tabOverlayOpen);
   const activeNativeNav = nativeNavigation[browser.activeTabId];
   const activeHost = getHost(browser.activeEntry.url).toLowerCase();
   const activeReaderFont = READER_FONTS.find((font) => font.id === readerFontFamily) ?? READER_FONTS[0];
@@ -235,6 +233,11 @@ export function App() {
     document.documentElement.dataset.reduceMotion = String(browser.preferences.reduceMotion);
     document.documentElement.dataset.incognito = String(isIncognito);
   }, [browser.activeEntry.title, browser.preferences.reduceMotion, isIncognito]);
+
+  // Popovers are mirrored above the page only while a native page covers the UI.
+  useEffect(() => {
+    setNativePageVisible(showDesktopWeb);
+  }, [showDesktopWeb]);
 
   useEffect(() => {
     if (!desktop) return undefined;
@@ -1922,7 +1925,6 @@ export function App() {
               incognito={isIncognito}
               visible={showDesktopWeb}
               covered={pageCovered}
-              livePreview={livePageOverlay}
               insetTop={findOpen ? 52 : 0}
               insetRight={devtoolsOpen && showDesktopWeb ? devtoolsWidth + 6 : 0}
               suspendedTabId={draggingTabId}

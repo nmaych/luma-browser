@@ -79,6 +79,20 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
     command: (tabId, name, args, incognito) => ipcRenderer.invoke('page-view:command', tabId, name, args, incognito),
     destroy: (tabId, incognito) => ipcRenderer.invoke('page-view:destroy', tabId, incognito),
   },
+  overlay: {
+    show: (payload) => ipcRenderer.send('overlay:show', payload),
+    hide: (id) => ipcRenderer.send('overlay:hide', id),
+    onClick: (callback) => {
+      const listener = (_event, steps) => callback(Array.isArray(steps) ? steps : []);
+      ipcRenderer.on('overlay:click', listener);
+      return () => ipcRenderer.removeListener('overlay:click', listener);
+    },
+    onOutside: (callback) => {
+      const listener = () => callback();
+      ipcRenderer.on('overlay:outside', listener);
+      return () => ipcRenderer.removeListener('overlay:outside', listener);
+    },
+  },
   onPageEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('page-view:event', listener);

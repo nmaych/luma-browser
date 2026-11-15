@@ -267,6 +267,19 @@ interface LumaDesktopApi {
     command: (tabId: string, name: string, args?: unknown[], incognito?: boolean) => Promise<unknown>;
     destroy: (tabId: string, incognito?: boolean) => Promise<boolean>;
   };
+  /** Mirrors an open HTML popover above the native page so the page is never covered. */
+  overlay: {
+    show: (payload: {
+      id: string;
+      rect: { x: number; y: number; width: number; height: number };
+      html: string;
+      css?: string;
+      theme?: string;
+    }) => void;
+    hide: (id?: string) => void;
+    onClick: (callback: (steps: number[]) => void) => () => void;
+    onOutside: (callback: () => void) => () => void;
+  };
   onPageEvent: (callback: (event: LumaPageViewEvent) => void) => () => void;
   configureShortcuts: (
     shortcuts: Record<string, string>,

@@ -10,8 +10,6 @@ interface PageHostLayerProps {
   visible: boolean;
   /** An HTML overlay (menu, panel, dialog) covers the page area. */
   covered: boolean;
-  /** The overlay is a short-lived popover, so the page under it stays live. */
-  livePreview?: boolean;
   /** Visible pages need this much empty space at the top, e.g. for the find bar. */
   insetTop?: number;
   /** Docked developer tools need room on the right. */
@@ -80,7 +78,6 @@ export function PageHostLayer({
   incognito,
   visible,
   covered,
-  livePreview = false,
   insetTop = 0,
   insetRight = 0,
   suspendedTabId = null,
@@ -234,10 +231,8 @@ export function PageHostLayer({
     }
   }, [appearance, incognito, liveTabs]);
 
-  // A still frame stands in for the page while an HTML overlay covers it. When
-  // the overlay is a menu, the frame keeps refreshing: the parked view still
-  // paints off-screen, so the page under the menu visibly keeps running
-  // instead of freezing into a screenshot.
+  // A still frame stands in for the page while a panel or dialog covers it.
+  // Popovers no longer come through here: they are mirrored above the page.
   useEffect(() => {
     if (!covered || !visible) {
       // Put the real page back first, then drop the still frame.
@@ -251,7 +246,6 @@ export function PageHostLayer({
       return undefined;
     }
     let active = true;
-    let timer = 0;
     /** Waits two frames: one for React to commit, one for the paint. */
     const parkAfterPaint = () => {
       window.requestAnimationFrame(() => {
@@ -260,10 +254,10 @@ export function PageHostLayer({
         });
       });
     };
-    const capture = async (jpeg: boolean): Promise<string | null> => {
-      for (let attempt = 0; attempt < (jpeg ? 1 : 3); attempt += 1) {
+    const capture = async (): Promise<string | null> => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         const data = await bridge
-          .command(activeTabId, 'captureSnapshot', jpeg ? [{ jpeg: true, quality: 60 }] : [], incognito)
+          .command(activeTabId, 'captureSnapshot', [], incognito)
           .catch(() => null);
         if (typeof data === 'string' && data.startsWith('data:image/')) return data;
         if (!active) return null;
@@ -271,21 +265,7 @@ export function PageHostLayer({
       }
       return null;
     };
-    const startLivePreview = () => {
-      if (!livePreview) return;
-      const tick = async () => {
-        if (!active) return;
-        const frame = await capture(true);
-        if (!active) return;
-        if (frame) {
-          lastFrame.current.set(activeTabId, frame);
-          setSnapshot((current) => (current?.data === frame ? current : { tabId: activeTabId, data: frame }));
-        }
-        timer = window.setTimeout(tick, frame ? 150 : 600);
-      };
-      timer = window.setTimeout(tick, 80);
-    };
-    void capture(false).then(async (data) => {
+    void capture().then(async (data) => {
       if (!active) return;
       if (!data) {
         // Never leave a blank area: reuse the last good frame when the page
@@ -293,7 +273,6 @@ export function PageHostLayer({
         const cached = lastFrame.current.get(activeTabId);
         if (cached) setSnapshot({ tabId: activeTabId, data: cached });
         parkAfterPaint();
-        startLivePreview();
         return;
       }
       const decoded = await decodeFrame(data);
@@ -306,13 +285,11 @@ export function PageHostLayer({
         return;
       }
       parkAfterPaint();
-      startLivePreview();
     });
     return () => {
       active = false;
-      window.clearTimeout(timer);
     };
-  }, [activeTabId, covered, incognito, livePreview, visible]);
+  }, [activeTabId, covered, incognito, visible]);
 
   // Page events are addressed to a tab id; forward the ones the app cares about.
   useEffect(() => {

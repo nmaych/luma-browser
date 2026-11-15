@@ -86,6 +86,11 @@ ipcRenderer.on('luma:autofill', (_event, payload) => {
 });
 
 installCapture();
+// A popover mirrored above the page stops covering it, so a click that lands on
+// the page must dismiss it the way an outside click did before.
+document.addEventListener('pointerdown', () => {
+  ipcRenderer.send('page:pointerdown');
+}, true);
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', installCapture, { once: true });
 }

@@ -1,10 +1,12 @@
 import { BookOpen, Camera, Check, Clock3, Code2, Download, EyeOff, FileDown, Maximize, MoreVertical, Plus, Printer, RotateCcw, Settings2, Star, Wifi, WifiOff } from 'lucide-react';
+import type { RefObject } from 'react';
 import { getAllSearchEngines } from '../../data/searchEngines';
 import type { CustomSearchEngine, SearchEngine } from '../../types';
 import { IconButton } from '../common/IconButton';
 import { SearchEngineMark } from '../common/SearchEngineMark';
 
 interface BrowserMenuProps {
+  rootRef?: RefObject<HTMLDivElement | null>;
   open: boolean;
   isOnline: boolean;
   canReopen: boolean;
@@ -43,7 +45,7 @@ export function BrowserMenu(props: BrowserMenuProps) {
       {props.open && (
         <>
           <button className="popover-dismiss" type="button" aria-label="关闭菜单" onClick={props.onClose} />
-          <div className="browser-menu popover">
+          <div ref={props.rootRef} className="browser-menu popover">
             <button type="button" onClick={action(props.onNewTab)}><Plus />新建标签页<span>Ctrl + T</span></button>
             {props.onIncognito && (
               <button type="button" onClick={action(props.onIncognito)}><EyeOff />新建无痕窗口<span>Ctrl + Shift + N</span></button>

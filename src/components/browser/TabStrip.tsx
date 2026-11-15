@@ -145,7 +145,9 @@ export function TabStrip(props: TabStripProps) {
 
   // Hover previews and the tab menu are HTML, but the native page is painted
   // above the HTML layer, so the app hides the page while they are open.
-  const overlayOpen = Boolean(hoverPreview) || Boolean(contextMenu);
+  // The tab context menu is mirrored above the page, so only the hover preview
+  // still needs the page to step aside.
+  const overlayOpen = Boolean(hoverPreview);
   useEffect(() => {
     props.onOverlayChange?.(overlayOpen);
   }, [overlayOpen]);

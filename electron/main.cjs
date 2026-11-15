@@ -6,6 +6,7 @@ const { shouldBlock, hostnameOf, AdblockManager, ruleCount: legacyAdblockRuleCou
 const passwordVault = require('./passwords.cjs');
 const { createPageViewManager } = require('./pageViews.cjs');
 const { createUpdater } = require('./updater.cjs');
+const overlaySurface = require('./overlaySurface.cjs');
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_PARTITION = 'persist:luma-browser';
@@ -109,6 +110,27 @@ function pageViewsFor(incognito) {
   }
   return pageViewManagers.get(key);
 }
+
+// Popovers are mirrored above the page by a transparent view. The renderer
+// reports geometry; clicks in the page mean the user clicked away.
+overlaySurface.wireIpc(ipcMain, BrowserWindow);
+
+/** Finds the Luma window that hosts a page webContents, native view or guest. */
+function windowForPageContents(contents) {
+  if (!contents || contents.isDestroyed()) return null;
+  for (const manager of pageViewManagers.values()) {
+    const win = manager.hostWindowFor(contents.id);
+    if (win && !win.isDestroyed()) return win;
+  }
+  const host = contents.hostWebContents;
+  if (host && !host.isDestroyed()) return BrowserWindow.fromWebContents(host);
+  return null;
+}
+
+ipcMain.on('page:pointerdown', (event) => {
+  const win = windowForPageContents(event.sender);
+  if (win) overlaySurface.dismissForPageClick(win);
+});
 
 /** Only safe http(s) and local file pages may be shown inside a page view. */
 function sanitizePageUrl(value) {

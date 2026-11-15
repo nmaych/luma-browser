@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Camera, Clock3, Download, History, Home, KeyRound, Languages, LockKeyhole, Newspaper, RotateCw, Search, Settings2, ShieldCheck, ShieldOff, Star, X } from 'lucide-react';
 import type { BrowserTab, CustomSearchEngine, HistoryItem, SearchEngine, TabEntry } from '../../types';
 import { displayUrl, getHost, getInternalPage, isExternalUrl } from '../../utils/url';
@@ -6,6 +6,7 @@ import { formatHistoryDate, formatTime } from '../../utils/date';
 import { IconButton } from '../common/IconButton';
 import { SiteIcon } from '../common/SiteIcon';
 import { useInputContextMenu } from '../../hooks/useInputContextMenu';
+import { useOverlaySurface, isOverlaySurfaceActive } from '../../hooks/useOverlaySurface';
 import { BrowserMenu } from './BrowserMenu';
 
 const TRANSLATION_TARGETS = [
@@ -121,27 +122,52 @@ export function NavigationBar(props: NavigationBarProps) {
     || passwordsOpen
     || suggestionsOpen
     || inputContextMenuOpen;
+  const menuRootRef = useRef<HTMLDivElement | null>(null);
+  const suggestionsRef = useRef<HTMLDivElement | null>(null);
+  const recentRootRef = useRef<HTMLDivElement | null>(null);
+  const shieldRootRef = useRef<HTMLDivElement | null>(null);
+  const screenshotRootRef = useRef<HTMLDivElement | null>(null);
+  const passwordsRootRef = useRef<HTMLDivElement | null>(null);
+  // Every popover except the translation panel is mirrored above the page, so
+  // the page no longer has to step aside and lose its sharpness.
+  useOverlaySurface(menuRootRef, menuOpen);
+  useOverlaySurface(suggestionsRef, suggestionsOpen);
+  useOverlaySurface(recentRootRef, recentOpen);
+  useOverlaySurface(shieldRootRef, shieldOpen);
+  useOverlaySurface(screenshotRootRef, screenshotOpen);
+  useOverlaySurface(passwordsRootRef, passwordsOpen);
   useEffect(() => {
-    props.onMenuOpenChange?.(anyPopoverOpen);
-  }, [anyPopoverOpen]);
-  // The native page keeps keyboard focus while it is parked, so Escape would
-  // never reach these popovers without an explicit handler here.
+    // The translation panel holds a <select>, which cannot be driven from the
+    // mirror, so it keeps using the parked-page fallback.
+    props.onMenuOpenChange?.(translateOpen);
+  }, [translateOpen]);
+  const closePopovers = () => {
+    setMenuOpen(false);
+    setRecentOpen(false);
+    setShieldOpen(false);
+    setTranslateOpen(false);
+    setScreenshotOpen(false);
+    setPasswordsOpen(false);
+    setIsFocused(false);
+    setActiveSuggestion(-1);
+  };
+  useEffect(() => {
+    const overlay = window.lumaDesktop?.overlay;
+    if (!overlay) return undefined;
+    return overlay.onOutside(closePopovers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // The page is live underneath, so Escape has to be handled in the renderer.
   useEffect(() => {
     if (!anyPopoverOpen) return undefined;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setMenuOpen(false);
-      setRecentOpen(false);
-      setShieldOpen(false);
-      setTranslateOpen(false);
-      setScreenshotOpen(false);
-      setPasswordsOpen(false);
-      setIsFocused(false);
-      setActiveSuggestion(-1);
+      closePopovers();
       (document.activeElement as HTMLElement | null)?.blur();
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anyPopoverOpen]);
 
   useEffect(() => {
@@ -154,6 +180,7 @@ export function NavigationBar(props: NavigationBarProps) {
 
   const go = (value: string) => {
     if (value.trim()) props.onNavigate(value);
+    setIsFocused(false);
     setActiveSuggestion(-1);
     (document.activeElement as HTMLElement | null)?.blur();
   };
@@ -193,7 +220,7 @@ export function NavigationBar(props: NavigationBarProps) {
             {recentOpen && (
               <>
                 <button className="popover-dismiss" type="button" aria-label="关闭最近打开" onClick={() => setRecentOpen(false)} />
-                <div className="recent-menu popover" role="menu" aria-label="最近打开">
+                <div ref={recentRootRef} className="recent-menu popover" role="menu" aria-label="最近打开">
                   <div className="recent-menu__header">最近打开</div>
                   {recentPages.length > 0 ? recentPages.map((item) => (
                     <button
@@ -241,7 +268,14 @@ export function NavigationBar(props: NavigationBarProps) {
             value={address}
             onChange={(event) => setAddress(event.target.value)}
             onFocus={(event) => { setIsFocused(true); event.target.select(); }}
-            onBlur={() => { setIsFocused(false); setActiveSuggestion(-1); }}
+            onBlur={(event) => {
+              // A focus move into the mirrored popover reports no related
+              // target; the mirror itself dismisses the dropdown, so keep it
+              // mounted until the replayed click has run on the real DOM.
+              if (!event.relatedTarget && isOverlaySurfaceActive()) return;
+              setIsFocused(false);
+              setActiveSuggestion(-1);
+            }}
             onContextMenu={openInputMenu}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
@@ -281,7 +315,7 @@ export function NavigationBar(props: NavigationBarProps) {
             <Star size={18} fill={props.isBookmarked ? 'currentColor' : 'none'} />
           </IconButton>
           {suggestionsOpen && (
-            <div className="address-suggestions" id="address-suggestions" role="listbox" aria-label="地址栏输入历史">
+            <div ref={suggestionsRef} className="address-suggestions" id="address-suggestions" role="listbox" aria-label="地址栏输入历史">
               {suggestions.map((item, index) => (
                 <button
                   type="button"
@@ -377,7 +411,7 @@ export function NavigationBar(props: NavigationBarProps) {
               {screenshotOpen && (
                 <>
                   <button className="popover-dismiss" type="button" aria-label="关闭截图菜单" onClick={() => setScreenshotOpen(false)} />
-                  <div className="nav-popover popover nav-popover--screenshot" role="dialog" aria-label="网页截图">
+                  <div ref={screenshotRootRef} className="nav-popover popover nav-popover--screenshot" role="dialog" aria-label="网页截图">
                     <div className="nav-popover__title">网页截图</div>
                     <button
                       type="button"
@@ -443,7 +477,7 @@ export function NavigationBar(props: NavigationBarProps) {
             {shieldOpen && (
               <>
                 <button className="popover-dismiss" type="button" aria-label="关闭拦截菜单" onClick={() => setShieldOpen(false)} />
-                <div className="nav-popover popover" role="dialog" aria-label="广告与跟踪拦截">
+                <div ref={shieldRootRef} className="nav-popover popover" role="dialog" aria-label="广告与跟踪拦截">
                   <div className="nav-popover__title">广告与跟踪拦截</div>
                   <p className="nav-popover__status">
                     {props.adblockEnabled ? '全局拦截已开启' : '全局拦截已关闭'}
@@ -472,7 +506,7 @@ export function NavigationBar(props: NavigationBarProps) {
               {passwordsOpen && (
                 <>
                   <button className="popover-dismiss" type="button" aria-label="关闭密码菜单" onClick={() => setPasswordsOpen(false)} />
-                  <div className="nav-popover popover" role="dialog" aria-label="已保存的登录信息">
+                  <div ref={passwordsRootRef} className="nav-popover popover" role="dialog" aria-label="已保存的登录信息">
                     <div className="nav-popover__title">填充登录信息</div>
                     {props.passwordEntries.map((entry) => (
                       <button
@@ -508,6 +542,7 @@ export function NavigationBar(props: NavigationBarProps) {
           <IconButton label="设置" active={page === 'settings'} onClick={props.onSettings}><Settings2 size={18} /></IconButton>
         </div>
         <BrowserMenu
+          rootRef={menuRootRef}
           open={menuOpen}
           isOnline={props.isOnline}
           canReopen={props.canReopen}
