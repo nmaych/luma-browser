@@ -389,9 +389,10 @@ function createUpdater({ currentVersion, onState }) {
       return false;
     }
     try {
-      // The NSIS installer waits for running copies of the app; quitting after
-      // handing it off lets it replace the files without a stuck window.
-      const child = spawn(installerPath, ['/S'], {
+      // electron-builder's installer relaunches the app after a silent install
+      // when it is started with --force-run, so the window comes back by itself
+      // once the files are replaced.
+      const child = spawn(installerPath, ['/S', '--force-run'], {
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
@@ -401,7 +402,7 @@ function createUpdater({ currentVersion, onState }) {
       publish({ status: 'error', error: error instanceof Error ? error.message : '无法启动安装程序' });
       return false;
     }
-    setTimeout(() => app.quit(), 600);
+    setTimeout(() => app.quit(), 800);
     return true;
   }
 

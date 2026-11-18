@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -74,6 +74,8 @@ interface PageContextState extends PageContextMenuInfo {
   tabId: string;
   menuX: number;
   menuY: number;
+  /** True when the menu belongs to an internal luma:// page (no native view). */
+  internal?: boolean;
 }
 
 const PERMISSION_LABELS: Record<string, string> = {
@@ -1557,31 +1559,140 @@ export function App() {
     }
   }, [browser.showToast, desktop]);
 
+  /** Copy/cut/paste/select-all work on the native page or on the internal page DOM. */
+  const runEditAction = useCallback(async (action: 'cut' | 'copy' | 'paste' | 'selectAll') => {
+    const internal = Boolean(pageContext?.internal);
+    if (!internal && pageContext) {
+      const view = webviews.current.get(pageContext.tabId);
+      if (action === 'cut') view?.cut();
+      else if (action === 'copy') view?.copy();
+      else if (action === 'paste') view?.paste();
+      else view?.selectAll();
+      return;
+    }
+    const saved = internalEditTarget.current;
+    if (saved?.field) {
+      saved.field.focus();
+      saved.field.setSelectionRange(saved.start, saved.end);
+    } else if (saved?.range) {
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(saved.range);
+    }
+    if (action === 'paste') {
+      const text = await navigator.clipboard.readText().catch(() => '');
+      if (text) document.execCommand('insertText', false, text);
+      return;
+    }
+    if (action === 'selectAll') {
+      const field = document.activeElement;
+      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) field.select();
+      else document.execCommand('selectAll');
+      return;
+    }
+    document.execCommand(action);
+  }, [pageContext]);
+
+  // Opening the menu focuses its first item, which would drop the page selection
+  // before "复制" runs; remember it so the action can restore it first.
+  const internalEditTarget = useRef<{
+    field: HTMLInputElement | HTMLTextAreaElement | null;
+    start: number;
+    end: number;
+    range: Range | null;
+  } | null>(null);
+
+  /**
+   * Internal pages have no native view, so their context menu is built from the
+   * DOM. The items come from the same builder as a web page, which keeps both
+   * surfaces identical.
+   */
+  const handlePageContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (!internalPage || event.defaultPrevented) return;
+    const target = event.target as HTMLElement;
+    event.preventDefault();
+    const selection = window.getSelection()?.toString() ?? '';
+    const editable = target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]');
+    const field = editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement ? editable : null;
+    const selectedInField = field
+      ? (field.selectionStart ?? 0) !== (field.selectionEnd ?? 0)
+      : false;
+    const selectionText = field
+      ? field.value.slice(field.selectionStart ?? 0, field.selectionEnd ?? 0).slice(0, 500)
+      : selection.slice(0, 500);
+    const link = target.closest('a[href]');
+    const image = target.closest('img');
+    const href = link instanceof HTMLAnchorElement ? link.href : '';
+    const source = image instanceof HTMLImageElement ? image.src : '';
+    const selectionObject = window.getSelection();
+    internalEditTarget.current = {
+      field,
+      start: field ? (field.selectionStart ?? 0) : 0,
+      end: field ? (field.selectionEnd ?? 0) : 0,
+      range: !field && selectionObject && selectionObject.rangeCount > 0
+        ? selectionObject.getRangeAt(0).cloneRange()
+        : null,
+    };
+    setPageContext({
+      webContentsId: 0,
+      x: 0,
+      y: 0,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      selectionText,
+      linkURL: href || '',
+      srcURL: source || '',
+      mediaType: image ? 'image' : 'none',
+      isEditable: Boolean(editable),
+      editFlags: {
+        canCopy: selectedInField || Boolean(selection.trim()),
+        canCut: Boolean(field || editable) && (selectedInField || Boolean(selection.trim())),
+        canPaste: Boolean(editable),
+        canSelectAll: true,
+      },
+      tabId: browser.activeTabId,
+      menuX: event.clientX,
+      menuY: event.clientY,
+      internal: true,
+    });
+  }, [browser.activeTabId, internalPage]);
+
   const pageMenuItems: ContextMenuEntry[] = (() => {
     if (!pageContext) return [];
-    const view = webviews.current.get(pageContext.tabId);
+    const internal = Boolean(pageContext.internal);
+    const pageUrl = browser.activeEntry.url;
+    const externalPage = isExternalUrl(pageUrl);
     const items: ContextMenuEntry[] = [
       { id: 'page-back', label: '后退', icon: <ArrowLeft />, disabled: !canGoBack, onSelect: handleBack },
       { id: 'page-forward', label: '前进', icon: <ArrowRight />, disabled: !canGoForward, onSelect: handleForward },
       { id: 'page-reload', label: '重新加载', icon: <RefreshCw />, shortcut: 'Ctrl+R', onSelect: handleRefresh },
-      { id: 'page-print', label: '打印…', icon: <Printer />, shortcut: 'Ctrl+P', onSelect: () => void printActivePage() },
-      { id: 'page-save-pdf', label: '另存为 PDF…', icon: <FileDown />, onSelect: () => void saveActivePagePdf() },
-      { id: 'page-capture', label: '保存网页截图…', icon: <Camera />, shortcut: 'Ctrl+Shift+X', onSelect: () => void captureScreenshot() },
-      { id: 'page-capture-region', label: '截取选定区域…', icon: <Camera />, onSelect: () => void captureScreenshot({ selectRegion: true }) },
-      { id: 'page-capture-full', label: '截取整个页面…', icon: <Camera />, onSelect: () => void captureScreenshot({ fullPage: true }) },
-      { id: 'page-capture-copy', label: '复制截图到剪贴板', icon: <Copy />, onSelect: () => void captureScreenshot({ mode: 'copy' }) },
-      { id: 'page-separator-1', separator: true },
     ];
 
-    if (pageContext.mediaType === 'image' && pageContext.srcURL) {
+    // Printing and screenshots need a real page; internal pages hide them so
+    // both surfaces keep exactly the same structure.
+    if (!internal) {
       items.push(
-        {
+        { id: 'page-print', label: '打印…', icon: <Printer />, shortcut: 'Ctrl+P', onSelect: () => void printActivePage() },
+        { id: 'page-save-pdf', label: '另存为 PDF…', icon: <FileDown />, onSelect: () => void saveActivePagePdf() },
+        { id: 'page-capture', label: '保存网页截图…', icon: <Camera />, shortcut: 'Ctrl+Shift+X', onSelect: () => void captureScreenshot() },
+        { id: 'page-capture-region', label: '截取选定区域…', icon: <Camera />, onSelect: () => void captureScreenshot({ selectRegion: true }) },
+        { id: 'page-capture-full', label: '截取整个页面…', icon: <Camera />, onSelect: () => void captureScreenshot({ fullPage: true }) },
+        { id: 'page-capture-copy', label: '复制截图到剪贴板', icon: <Copy />, onSelect: () => void captureScreenshot({ mode: 'copy' }) },
+      );
+    }
+    items.push({ id: 'page-separator-1', separator: true });
+
+    if (pageContext.mediaType === 'image' && pageContext.srcURL) {
+      if (pageContext.srcURL.startsWith('http')) {
+        items.push({
           id: 'open-image-tab',
           label: '在新标签页中打开图片',
           icon: <ImageIcon />,
           onSelect: () => browser.newTab(pageContext.srcURL),
-        },
-        {
+        });
+      }
+      if (!internal) {
+        items.push({
           id: 'save-image',
           label: '图片另存为…',
           icon: <Download />,
@@ -1590,7 +1701,9 @@ export function App() {
               if (!started) browser.showToast({ tone: 'error', title: '无法保存这张图片' });
             });
           },
-        },
+        });
+      }
+      items.push(
         {
           id: 'copy-image-url',
           label: '复制图片地址',
@@ -1627,7 +1740,10 @@ export function App() {
           icon: <Scissors />,
           shortcut: 'Ctrl+X',
           disabled: !pageContext.editFlags.canCut,
-          onSelect: () => { view?.cut(); browser.showToast({ tone: 'success', title: '已剪切' }); },
+          onSelect: () => {
+            void runEditAction('cut');
+            if (!internal) browser.showToast({ tone: 'success', title: '已剪切' });
+          },
         },
         {
           id: 'copy-text',
@@ -1635,7 +1751,10 @@ export function App() {
           icon: <Copy />,
           shortcut: 'Ctrl+C',
           disabled: !pageContext.editFlags.canCopy,
-          onSelect: () => { view?.copy(); browser.showToast({ tone: 'success', title: '已复制' }); },
+          onSelect: () => {
+            void runEditAction('copy');
+            if (!internal) browser.showToast({ tone: 'success', title: '已复制' });
+          },
         },
         {
           id: 'paste',
@@ -1643,7 +1762,7 @@ export function App() {
           icon: <TextCursorInput />,
           shortcut: 'Ctrl+V',
           disabled: !pageContext.editFlags.canPaste,
-          onSelect: () => view?.paste(),
+          onSelect: () => void runEditAction('paste'),
         },
         { id: 'page-separator-3', separator: true },
       );
@@ -1654,7 +1773,10 @@ export function App() {
           label: '复制选中文字',
           icon: <Copy />,
           shortcut: 'Ctrl+C',
-          onSelect: () => { view?.copy(); browser.showToast({ tone: 'success', title: '已复制选中文字' }); },
+          onSelect: () => {
+            void runEditAction('copy');
+            if (!internal) browser.showToast({ tone: 'success', title: '已复制选中文字' });
+          },
         },
         { id: 'page-separator-3', separator: true },
       );
@@ -1667,7 +1789,7 @@ export function App() {
         icon: <MousePointer2 />,
         shortcut: 'Ctrl+A',
         disabled: pageContext.isEditable && !pageContext.editFlags.canSelectAll,
-        onSelect: () => view?.selectAll(),
+        onSelect: () => void runEditAction('selectAll'),
       },
       { id: 'page-separator-4', separator: true },
       {
@@ -1681,13 +1803,14 @@ export function App() {
         id: 'copy-page-url',
         label: '复制页面地址',
         icon: <Link2 />,
-        onSelect: () => void copyText(browser.activeEntry.url),
+        onSelect: () => void copyText(pageUrl),
       },
       {
         id: 'open-system',
         label: '在系统浏览器中打开',
         icon: <ExternalLink />,
-        onSelect: () => void desktop?.openExternal(browser.activeEntry.url),
+        disabled: !externalPage,
+        onSelect: () => void desktop?.openExternal(pageUrl),
       },
     );
     return items;
@@ -1916,7 +2039,7 @@ export function App() {
       </header>
 
       <div className={`browser-content ${browser.activePanel ? 'has-panel' : ''}`}>
-        <main className="web-content" aria-label="网页内容区域">
+        <main className="web-content" aria-label="网页内容区域" onContextMenu={handlePageContextMenu}>
           {renderPage()}
           {isDesktop && (
             <PageHostLayer

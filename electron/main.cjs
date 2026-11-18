@@ -1148,7 +1148,18 @@ function uniqueDownloadPath(directory, filename) {
 }
 
 function defaultDownloadDirectory() {
-  return path.join(path.dirname(app.getPath('exe')), 'LumaDownload');
+  // Downloads land next to the application folder (one level up), which keeps
+  // them beside the portable build instead of buried in the install directory.
+  if (!app.isPackaged) return app.getPath('downloads');
+  const exeDir = path.dirname(app.getPath('exe'));
+  const parent = path.dirname(exeDir);
+  try {
+    fs.accessSync(parent, fs.constants.W_OK);
+    return parent;
+  } catch {
+    // A read-only install location (e.g. Program Files) falls back to Downloads.
+    return app.getPath('downloads');
+  }
 }
 
 function downloadSettingsPath() {

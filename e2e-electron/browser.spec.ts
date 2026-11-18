@@ -33,6 +33,37 @@ test.afterAll(async () => {
 
 
 
+
+/**
+ * The tear-off window follows the OS cursor, which a synthetic drag cannot
+ * move. Patching the main-process cursor keeps those tests deterministic while
+ * still exercising the real code path.
+ */
+async function setTestCursor(point: { x: number; y: number } | null) {
+  await app.evaluate(({ screen }, next) => {
+    const holder = globalThis as unknown as {
+      __origCursor?: () => { x: number; y: number };
+      __testCursor?: { x: number; y: number } | null;
+    };
+    if (!holder.__origCursor) {
+      holder.__origCursor = screen.getCursorScreenPoint.bind(screen);
+      screen.getCursorScreenPoint = () => holder.__testCursor ?? holder.__origCursor!();
+    }
+    holder.__testCursor = next;
+  }, point);
+}
+
+/** Puts the simulated cursor inside the tab bar, where a reorder drag happens. */
+async function setCursorInTabBar(offsetX = 80, offsetY = 18) {
+  const windowId = await mainWindowId();
+  const bounds = await app.evaluate(({ BrowserWindow }, id) => {
+    const win = BrowserWindow.fromId(id);
+    return win ? win.getContentBounds() : null;
+  }, windowId);
+  if (!bounds) return;
+  await setTestCursor({ x: bounds.x + offsetX, y: bounds.y + offsetY });
+}
+
 /** Id of the window that hosts this test page (never a helper window). */
 async function mainWindowId(): Promise<number> {
   return page.evaluate(() => window.lumaDesktop?.getWindowId() ?? 0);
@@ -214,7 +245,10 @@ test('switches search engines, reorders tabs and exposes tab context actions', a
   await page.getByRole('button', { name: '新建标签页 (Ctrl+T)' }).click();
   await expect(page.getByRole('tab')).toHaveCount(3);
 
+  // Keep the simulated pointer inside the tab bar so this stays a reorder.
+  await setCursorInTabBar();
   await page.getByRole('tab', { name: '新标签页' }).dragTo(page.getByRole('tab', { name: '设置' }), { targetPosition: { x: 8, y: 16 } });
+  await setTestCursor(null);
   const order = await page.getByRole('tab').evaluateAll((tabs) => tabs.map((tab) => tab.textContent?.trim()));
   expect(order[0]).toContain('新标签页');
   expect(order[1]).toContain('设置');
@@ -275,6 +309,28 @@ test('shows a custom context menu on real web content', async () => {
   await expect(menu.getByRole('menuitem', { name: '全选' })).toBeEnabled();
   await expect(menu.getByRole('menuitem', { name: /为此页添加书签|移除此页书签/ })).toBeVisible();
   await page.screenshot({ path: 'test-results/ui-page-context.png' });
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+});
+
+test('shows the same context menu on internal pages', async () => {
+  await page.getByRole('textbox', { name: '地址和搜索栏' }).fill('luma://bookmarks');
+  await page.getByRole('textbox', { name: '地址和搜索栏' }).press('Enter');
+  const main = page.getByRole('main', { name: '网页内容区域' });
+  await expect(main.getByRole('heading', { name: '书签', level: 1 })).toBeVisible();
+
+  const box = await main.boundingBox();
+  if (!box) throw new Error('Missing page surface');
+  await page.mouse.click(box.x + box.width - 60, box.y + 40, { button: 'right' });
+  const menu = page.getByRole('menu', { name: '网页选项' });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '后退' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '重新加载' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '全选' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '复制页面地址' })).toBeVisible();
+  // Page-only actions stay out of the internal menu.
+  await expect(menu.getByRole('menuitem', { name: /网页截图/ })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: /另存为 PDF/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
 });
@@ -806,6 +862,11 @@ test('opens settings in a new tab and applies webpage font and zoom preferences'
 });
 
 test('changes the default download directory', async () => {
+  // Self-contained: the settings page may have been left on another section.
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  await expect(page.getByRole('button', { name: '更改位置' })).toBeVisible();
+
   const custom = path.join(userDataDir, 'CustomDownloads');
   mkdirSync(custom, { recursive: true });
   await app.evaluate(({ dialog }, directory) => {
@@ -822,9 +883,14 @@ test('changes the default download directory', async () => {
   expect(info?.isDefault).toBe(false);
 
   await page.getByRole('button', { name: '恢复默认' }).click();
-  await expect(page.locator('.download-path')).toHaveText(/LumaDownload$/);
+  await expect.poll(
+    async () => (await page.evaluate(() => window.lumaDesktop?.getDownloadDirectory()))?.isDefault,
+  ).toBe(true);
   const restored = await page.evaluate(() => window.lumaDesktop?.getDownloadDirectory());
-  expect(restored?.isDefault).toBe(true);
+  expect(restored?.directory).not.toBe(custom);
+  // The default lives one level above the application folder (or Downloads
+  // while running from source).
+  expect(restored?.directory ?? '').not.toContain('LumaDownload');
 });
 
 test('imports and exports bookmark HTML files', async () => {
@@ -1212,8 +1278,10 @@ test('tears a tab into a new window without reloading either page', async () => 
   const tornTab = await activeTabId();
   await runInPage('window.__lumaLiveMarker = "kept"', tornTab);
 
-  const layout = await app.evaluate(({ BrowserWindow, screen }) => {
-    const win = BrowserWindow.getAllWindows()[0];
+  const windowId = await mainWindowId();
+  const layout = await app.evaluate(({ BrowserWindow, screen }, id) => {
+    const win = BrowserWindow.fromId(id);
+    if (!win) throw new Error('Missing main window');
     if (win.isMaximized()) win.unmaximize();
     const area = screen.getPrimaryDisplay().workArea;
     const bounds = {
@@ -1224,7 +1292,7 @@ test('tears a tab into a new window without reloading either page', async () => 
     };
     win.setBounds(bounds);
     return { bounds, area };
-  });
+  }, windowId);
   await page.waitForTimeout(300);
 
   // Drop inside the page area: tearing off must also work below the tab bar.
@@ -1234,14 +1302,11 @@ test('tears a tab into a new window without reloading either page', async () => 
   // Pin the dragged element: the source switches to another tab once the drag starts.
   const active = page.locator(`.browser-tab[data-tab-id="${tornTab}"]`);
   const windowsBefore = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => win.id));
+  await setTestCursor({ x: dropPoint.screenX, y: dropPoint.screenY });
 
   // dragstart → drag (leaves the tab bar, so the page starts following) → dragend.
-  for (const step of [
-    { type: 'dragstart', clientX: 200, clientY: 18 },
-    { type: 'drag', clientX: 520, clientY: 320 },
-    { type: 'dragend', clientX: 200, clientY: 18 },
-  ] as const) {
-    await active.evaluate((element, args) => {
+  const dispatchStep = (step: { type: string; clientX: number; clientY: number }) =>
+    active.evaluate((element, args) => {
       const data = new DataTransfer();
       data.setData('text/plain', element.getAttribute('data-tab-id') || '');
       data.setData('application/x-luma-item', 'tab');
@@ -1255,7 +1320,15 @@ test('tears a tab into a new window without reloading either page', async () => 
         clientY: args.step.clientY,
       }));
     }, { step, point: dropPoint });
-  }
+
+  await dispatchStep({ type: 'dragstart', clientX: 200, clientY: 18 });
+  await dispatchStep({ type: 'drag', clientX: 520, clientY: 320 });
+  // The window must open exactly where the drag preview was.
+  const followerBounds = await app.evaluate(({ BrowserWindow }, before) => {
+    const win = BrowserWindow.getAllWindows().find((candidate) => !before.includes(candidate.id));
+    return win ? win.getBounds() : null;
+  }, windowsBefore);
+  await dispatchStep({ type: 'dragend', clientX: 200, clientY: 18 });
 
   // The dragged tab, with its running page, appears in a new window at the drop point.
   await expect.poll(
@@ -1280,9 +1353,9 @@ test('tears a tab into a new window without reloading either page', async () => 
   await expect(page.locator('.browser-tab.is-active')).toHaveAttribute('data-tab-id', keptTab);
   expect(await runInPage('window.__lumaKept', keptTab)).toBe('kept');
 
-  // The window keeps the pointer over the tab it grabbed (offset 200, 18).
-  expect(after.created?.bounds.x).toBe(dropPoint.screenX - 200);
-  expect(after.created?.bounds.y).toBe(dropPoint.screenY - 18);
+  // The window opens exactly where the drag preview was.
+  expect(followerBounds).not.toBeNull();
+  expect(after.created?.bounds).toEqual(followerBounds);
   await expect.poll(
     () => app.windows().filter((candidate) => candidate !== page && candidate.url().startsWith('file:')).length,
     { timeout: 20_000 },
@@ -1302,6 +1375,7 @@ test('tears a tab into a new window without reloading either page', async () => 
   await app.evaluate(({ BrowserWindow }, before) => {
     BrowserWindow.getAllWindows().find((candidate) => !before.includes(candidate.id))?.close();
   }, windowsBefore);
+  await setTestCursor(null);
   await app.evaluate(({ BrowserWindow }, bounds) => {
     BrowserWindow.getAllWindows()[0]?.setBounds(bounds);
   }, layout.bounds);
@@ -1327,6 +1401,7 @@ test('keeps the maximized window in place when a tab is torn out', async () => {
   // Pin the element: the source switches to another tab once the drag starts.
   const active = page.locator(`.browser-tab[data-tab-id="${tabId}"]`);
   const dropPoint = { screenX: 700, screenY: 420 };
+  await setTestCursor({ x: dropPoint.screenX, y: dropPoint.screenY });
 
   for (const step of [
     { type: 'dragstart', clientX: 220, clientY: 18 },
@@ -1371,6 +1446,7 @@ test('keeps the maximized window in place when a tab is torn out', async () => {
   expect(state.created?.bounds.x).toBe(dropPoint.screenX - 220);
   expect(state.created?.bounds.y).toBe(dropPoint.screenY - 18);
 
+  await setTestCursor(null);
   await app.evaluate(({ BrowserWindow }, before) => {
     BrowserWindow.getAllWindows().find((candidate) => !before.includes(candidate.id))?.close();
     const source = BrowserWindow.getAllWindows().find((candidate) => before.includes(candidate.id));
@@ -1525,26 +1601,23 @@ test('merges a torn-off tab back into the window under the drop point', async ()
   if (!tornPage) throw new Error('Missing torn window page');
   await expect(tornPage.locator('.browser-tab').first()).toBeVisible({ timeout: 15_000 });
 
-  for (const step of [
-    { type: 'dragstart', clientX: 80, clientY: 18 },
-    { type: 'drag', clientX: 300, clientY: 220 },
-    { type: 'dragend', clientX: 80, clientY: 18 },
-  ] as const) {
-    await tornPage.locator('.browser-tab.is-active').evaluate((element, args) => {
-      const data = new DataTransfer();
-      data.setData('text/plain', element.getAttribute('data-tab-id') || '');
-      data.setData('application/x-luma-item', 'tab');
-      element.dispatchEvent(new DragEvent(args.step.type, {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer: data,
-        screenX: args.point.screenX,
-        screenY: args.point.screenY,
-        clientX: args.step.clientX,
-        clientY: args.step.clientY,
-      }));
-    }, { step, point: dropPoint });
-  }
+  // The pointer is over the target tab bar while the drag starts: entering it is
+  // enough to merge, no button release needed.
+  await setTestCursor({ x: dropPoint.screenX, y: dropPoint.screenY });
+  await tornPage.locator('.browser-tab.is-active').evaluate((element, point) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', element.getAttribute('data-tab-id') || '');
+    data.setData('application/x-luma-item', 'tab');
+    element.dispatchEvent(new DragEvent('dragstart', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: data,
+      screenX: point.screenX,
+      screenY: point.screenY,
+      clientX: 80,
+      clientY: 18,
+    }));
+  }, dropPoint);
 
   await expect.poll(
     () => page.locator('.browser-tab').count(),
@@ -1557,6 +1630,7 @@ test('merges a torn-off tab back into the window under the drop point', async ()
     { timeout: 15_000 },
   ).toBe(windowsBefore.length);
 
+  await setTestCursor(null);
   await app.evaluate(({ BrowserWindow }, bounds) => {
     BrowserWindow.getAllWindows()[0]?.setBounds(bounds);
   }, layout.main);

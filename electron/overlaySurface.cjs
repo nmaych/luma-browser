@@ -19,7 +19,10 @@ const BASE_HTML = `<!doctype html>
 <head><meta charset="utf-8">
 <style id="luma-surface-css"></style>
 <style>
-html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; -webkit-user-select: none; }
+html, body, #luma-surface-root { margin: 0; padding: 0; overflow: hidden; -webkit-user-select: none; }
+/* The app stylesheet paints a page background; on this transparent surface it
+   would show up as a white frame around every popover. */
+html, body, #luma-surface-root, :root { background: transparent !important; }
 #luma-surface-root { position: absolute; }
 #luma-surface-root > * {
   position: absolute !important;
