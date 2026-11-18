@@ -14,6 +14,8 @@ release/1.13.0/Luma-Browser-Setup-1.13.0.exe
 
 双击安装程序即可完成安装。安装程序支持选择安装目录，并会创建桌面与开始菜单快捷方式，无需管理员权限。
 
+已发布的版本可在 [GitHub Releases](https://github.com/nmaych/luma-browser/releases/latest) 直接下载：Release 附件同时包含 `Luma-Browser-Setup-<version>.exe`、`latest.yml` 与 `.blockmap`，`latest.yml` 是应用内自动更新的版本索引，缺少它旧版本就无法检测到更新。
+
 开发环境也可以直接启动未打包的应用：
 
 ```bash
