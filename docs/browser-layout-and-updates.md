@@ -165,3 +165,20 @@ D:\Sogou\SogouExplorer\
 - **独立更新进程**：Chrome 有常驻的 omaha 更新服务，搜狗有独立的 Liveup 进程。Luma 的更新在主进程内，
   应用不运行时不检查更新。
 - **代码签名**：三者都签名，Luma 尚未配置证书，SmartScreen 会提示"未知发布者"。
+
+## 六、发布检查清单
+
+发布不是"传上去就完事"，尤其是通过代理网络上传 100 MB 以上的安装包。1.15.0 首次发布时就踩到了这个问题：
+GitHub 返回 201 且附件状态是 `uploaded`，但线上文件比本地少了 245 字节，哈希对不上，公开下载地址直接 404；
+同一问题还影响了历史版本 1.12.x 与 1.13.0（均被截断，已重传修复）。
+
+因此每次发布按下面的顺序执行，并**回读校验**：
+
+1. `npm run dist` 生成安装包，脚本同时写出 `checksums.txt`。
+2. 创建 Release，上传 `Luma-Browser-Setup-<version>-<arch>.exe`、`latest.yml`、`.blockmap`、`checksums.txt`。
+3. **下载刚上传的附件并计算 SHA256**，与本地文件比对；不一致就删除附件重传，不要相信上传接口返回的 201。
+4. 检查 `https://github.com/<owner>/<repo>/releases/latest/download/latest.yml` 返回的版本号与 `sha512` 与本地产物一致。
+5. 检查安装包地址支持 Range 请求（`curl -r 0-1023` 返回 `206`），自动更新的断点续传依赖它。
+6. 抽查一个旧版本 Release 的附件哈希，避免历史包在用户手动下载时损坏。
+
+脚本化版本：`/e/develop/.gh-tmp/upload.mjs`（临时脚本，逻辑是"上传 → 回读 → 比对 → 不一致删除重试"，最多 3 次）。
