@@ -96,8 +96,14 @@ interface LumaUpdateState {
   logPath: string;
 }
 
-interface LumaAppPaths {
-  install: string;
+/** System memory sample sent when the machine is running low (Chrome Memory Saver style). */
+interface LumaMemoryPressure {
+  available: number;
+  total: number;
+  ratio: number;
+}
+
+interface LumaAppPaths {  install: string;
   userData: string;
   update: string;
   log: string;
@@ -224,6 +230,7 @@ interface LumaDesktopApi {
   setUpdatePrefs: (patch: Partial<LumaUpdatePrefs>) => Promise<LumaUpdateState | null>;
   getAppPaths: () => Promise<LumaAppPaths | null>;
   onUpdateState: (callback: (state: LumaUpdateState) => void) => () => void;
+  onMemoryPressure: (callback: (info: LumaMemoryPressure) => void) => () => void;
   openIncognito: () => void;
   openDownloads: () => void;
   tearOffTab: (tab: LumaInitialTab, point?: { screenX: number; screenY: number }) => Promise<boolean>;

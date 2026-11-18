@@ -4,6 +4,32 @@
 存储或 IPC 不兼容变更提升 MAJOR。每个版本只发布一次，并同步更新 `package.json`、
 设置页版本兜底值与 `release/<version>/` 目录。
 
+## 1.15.0
+
+框架、机制与界面三方面的调整，模块地图与机制说明见 [docs/architecture.md](docs/architecture.md)。
+
+框架：
+
+- **主进程拆出服务层**：设置读写（`main/settings.cjs`）、快捷键与老板键（`main/shortcuts.cjs`）、
+  网页翻译（`main/translate.cjs`）、窗口几何（`main/windowState.cjs`）从 `main.cjs` 独立出来，
+  依赖通过参数注入，可以脱离 Electron 做单元测试；`main.cjs` 只保留装配职责。
+- **会话策略集中声明**：新增 `main/sessionPolicy.cjs`，把「UA → 权限 → 请求拦截 → 下载」的固定顺序
+  写成一条管线，普通与无痕 profile 走同一份代码，避免漏配。
+
+机制：
+
+- **磁盘缓存配额**：启动参数限制 HTTP 缓存为 256 MB（Chrome 同量级），避免 profile 无上限增长。
+- **全局进程沙箱**：`app.enableSandbox()` 让界面渲染进程也进入 Chromium 沙箱，此前只有页面视图单独开启。
+- **内存压力回收**：主进程每 60 秒采样可用内存，低于 12% 且距上次触发超过 5 分钟时通知渲染层，
+  由渲染层按“自动休眠后台标签页”的设置回收后台标签，并提示用户。
+- **标签键盘循环**：`Ctrl+Tab` / `Ctrl+Shift+Tab` / `Ctrl+PageDown` / `Ctrl+PageUp` 按浏览器惯例切换标签，
+  与可自定义快捷键分开，不会覆盖用户的按键配置。
+
+界面：
+
+- **双击标签栏空白处新建标签页**，与 Chrome、搜狗一致，不必精确点中 `+`。
+- 内存回收时给出一次性提示，说明标签已休眠、切回会重新加载。
+
 ## 1.14.0
 
 目录布局、文件命名和更新流程向 Chrome、搜狗浏览器等主流实现看齐，实测结论与对照表见

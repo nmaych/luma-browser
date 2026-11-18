@@ -424,6 +424,12 @@ export function TabStrip(props: TabStripProps) {
           if (last && last.id !== draggingId) props.onReorder(draggingId, last.id, 'after');
           finishDrag();
         }}
+        onDoubleClick={(event) => {
+          // Chrome opens a new tab when the empty part of the strip is
+          // double-clicked; tabs handle their own double-click (close).
+          if ((event.target as Element).closest('.browser-tab')) return;
+          props.onNew();
+        }}
       >
         {props.tabs.map((tab) => {
           const entry = currentEntry(tab);

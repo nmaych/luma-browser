@@ -1184,6 +1184,25 @@ export function useBrowser(options: UseBrowserOptions = {}) {
         refresh();
         return;
       }
+      // Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+PageDown/PageUp) cycle tabs. Every
+      // mainstream browser keeps these fixed instead of exposing them as
+      // rebindable shortcuts, so they bypass the preference table.
+      if (
+        event.ctrlKey
+        && !event.altKey
+        && !event.metaKey
+        && (event.key === 'Tab' || event.key === 'PageDown' || event.key === 'PageUp')
+      ) {
+        event.preventDefault();
+        const list = tabsRef.current;
+        if (list.length < 2) return;
+        const index = list.findIndex((tab) => tab.id === activeTab.id);
+        if (index < 0) return;
+        const forward = event.key === 'Tab' ? !event.shiftKey : event.key === 'PageDown';
+        const next = (index + (forward ? 1 : -1) + list.length) % list.length;
+        setActiveTabId(list[next].id);
+        return;
+      }
       const shortcuts = preferences.shortcuts;
       let action: ShortcutAction | null = null;
       for (const candidate of Object.keys(shortcuts) as ShortcutAction[]) {

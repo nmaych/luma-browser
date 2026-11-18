@@ -9,7 +9,7 @@
 Windows 安装包构建完成后位于：
 
 ```text
-release/1.14.0/Luma-Browser-Setup-1.14.0-x64.exe
+release/1.15.0/Luma-Browser-Setup-1.15.0-x64.exe
 ```
 
 双击安装程序即可完成安装。安装程序支持选择安装目录，并会创建桌面与开始菜单快捷方式，无需管理员权限。主程序文件名为 `LumaBrowser.exe`（无空格，与 `chrome.exe`、`SogouExplorer.exe` 的习惯一致），快捷方式仍显示 “Luma Browser”。
@@ -32,11 +32,11 @@ release/1.14.0/Luma-Browser-Setup-1.14.0-x64.exe
    ├─ update.json                     检查时间、更新偏好、待安装包
    ├─ update.log                      更新日志（超出 512 KB 轮转）
    └─ packages\
-      ├─ Luma-Browser-Setup-1.14.0-x64.exe
+      ├─ Luma-Browser-Setup-1.15.0-x64.exe
       └─ previous\                   上一版安装包，用于回滚
 ```
 
-1.13 及更早版本把用户数据放在 `%APPDATA%\Luma Browser`。1.14 首次启动时会把它移动到新位置：同盘直接改名（瞬间完成），跨盘或文件被占用时复制状态文件并跳过可重建的缓存目录，原目录保持不动。显式传入 `--user-data-dir`（测试与便携运行）时完全遵循环调用方。细节见 [docs/browser-layout-and-updates.md](docs/browser-layout-and-updates.md)。
+1.13 及更早版本把用户数据放在 `%APPDATA%\Luma Browser`。1.14 首次启动时会把它移动到新位置：同盘直接改名（瞬间完成），跨盘或文件被占用时复制状态文件并跳过可重建的缓存目录，原目录保持不动。显式传入 `--user-data-dir`（测试与便携运行）时完全遵循环调用方。细节见 [docs/browser-layout-and-updates.md](docs/browser-layout-and-updates.md)，进程与模块划分见 [docs/architecture.md](docs/architecture.md)。
 
 开发环境也可以直接启动未打包的应用：
 
@@ -191,10 +191,10 @@ npm run dist:dir
 输出目录：
 
 - `dist/`：React 渲染层静态文件
-- `release/1.14.0/win-unpacked/`：可直接运行的免安装应用目录（入口 `LumaBrowser.exe`）
-- `release/1.14.0/Luma-Browser-Setup-1.14.0-x64.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `28AFD7DA02218A70923F497A976583A1885FA522F339D95AA640E83AABE1D12D`）
-- `release/1.14.0/latest.yml`、`.blockmap`：自动更新索引与增量更新差异图
-- `release/1.14.0/checksums.txt`：各产物的 SHA256 清单（由 `npm run dist` 自动生成）
+- `release/1.15.0/win-unpacked/`：可直接运行的免安装应用目录（入口 `LumaBrowser.exe`）
+- `release/1.15.0/Luma-Browser-Setup-1.15.0-x64.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `5FC187E28FA5120777A2E73D760A1625E4B13177858E62FD392E1AC718388AB5`）
+- `release/1.15.0/latest.yml`、`.blockmap`：自动更新索引与增量更新差异图
+- `release/1.15.0/checksums.txt`：各产物的 SHA256 清单（由 `npm run dist` 自动生成）
 - `build/`：应用 PNG/ICO 图标
 
 每次构建成功后，脚本会自动删除旧版本遗留的 `win-unpacked` 免安装目录（保留各版本的安装程序），当前版本的免安装目录会保留用于冒烟验证。清理先用递归删除，失败时逐文件删除；仍被占用时会跳过并在下次构建重试，也可以手动执行 `npm run clean:release`。
@@ -210,14 +210,14 @@ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-
 ## 测试
 
 ```bash
-# 52 项 Vitest 单元与界面集成测试
+# 61 项 Vitest 单元与界面集成测试
 npm test
 
 # Web 预览层响应式与交互测试（5 项）
 npx playwright install chromium
 npm run test:e2e
 
-# 真实 Electron 应用测试（43 项）：窗口、原生页面视图、标签拖出与合并、网页截图、图标缓存、停止加载、阅读章节、设置、网站数据和历史独立标签
+# 真实 Electron 应用测试（44 项）：窗口、原生页面视图、标签拖出与合并、网页截图、图标缓存、停止加载、阅读章节、设置、网站数据和历史独立标签
 npm run test:electron
 
 # 对已打包的免安装应用做启动与真实网页冒烟验证

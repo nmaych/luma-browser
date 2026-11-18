@@ -7,6 +7,17 @@ const passwordVault = require('./passwords.cjs');
 const { createPageViewManager } = require('./pageViews.cjs');
 const { createUpdater } = require('./updater.cjs');
 const { configureUserData } = require('./appPaths.cjs');
+const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
+const { configureSession } = require('./main/sessionPolicy.cjs');
+const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
+const { translateTexts } = require('./main/translate.cjs');
+const {
+  normalizeExternalBounds,
+  normalizeScreenPoint,
+  normalizeWindowBounds,
+  readWindowState,
+  writeWindowState,
+} = require('./main/windowState.cjs');
 const overlaySurface = require('./overlaySurface.cjs');
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -45,11 +56,25 @@ const DEFAULT_APP_SETTINGS = {
   blockedTotal: 0,
 };
 
+// Chromium's HTTP cache is unbounded by default, which lets a profile grow into
+// the gigabytes. Chrome keeps it around 320 MB; 256 MB is the same order of
+// magnitude and still caches a working set of sites.
+app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
+// Chromium's renderer sandbox for every process, including the UI renderer.
+// Page views already opt in per view; enabling it app-wide closes the gap.
+app.enableSandbox();
+
 // Chrome keeps program files and profile data in separate trees; Luma follows
 // the same split so an upgrade never rewrites the profile. Resolved before the
 // single-instance lock because that lock lives inside userData.
 const appPaths = configureUserData(app, { log: (line) => console.log(line) });
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+// Memory pressure sampling, modelled on Chrome's Memory Saver: the browser
+// polls system memory and asks the UI to discard idle tabs instead of letting
+// the OS swap the whole machine to a crawl.
+const MEMORY_PRESSURE_INTERVAL_MS = 60 * 1000;
+const MEMORY_PRESSURE_RATIO = 0.12;
+const MEMORY_PRESSURE_COOLDOWN_MS = 5 * 60 * 1000;
 
 // A second process sharing the same userData would race on passwords.json,
 // settings and download records. Keep exactly one instance per profile.
@@ -240,8 +265,6 @@ let appSettings = { ...DEFAULT_APP_SETTINGS, adblock: { ...DEFAULT_APP_SETTINGS.
 const blockedCounts = new Map();
 /** @type {Map<number, NodeJS.Timeout>} */
 const blockedBroadcastTimers = new Map();
-/** @type {string | null} */
-let registeredBossKey = null;
 /** @type {NodeJS.Timeout | null} */
 let persistDownloadsTimer = null;
 /** @type {Map<string, any>} */
@@ -257,6 +280,8 @@ let lastRendererCrashAt = 0;
 let updateManager = null;
 let startupUpdateTimer = null;
 let updateCheckTimer = null;
+let memoryPressureTimer = null;
+let lastMemoryPressureAt = 0;
 
 function isFileUrl(url) {
   try {
@@ -285,48 +310,24 @@ function appSettingsPath() {
 }
 
 function loadAppSettings() {
-  const next = {
-    ...DEFAULT_APP_SETTINGS,
-    adblock: { ...DEFAULT_APP_SETTINGS.adblock, disabledSites: [] },
-    shortcuts: { ...DEFAULT_SHORTCUTS },
-  };
-  try {
-    const parsed = JSON.parse(fs.readFileSync(appSettingsPath(), 'utf8'));
-    if (parsed && typeof parsed === 'object') {
-      if (parsed.adblock && typeof parsed.adblock === 'object') {
-        next.adblock.enabled = parsed.adblock.enabled !== false;
-        if (Array.isArray(parsed.adblock.disabledSites)) {
-          next.adblock.disabledSites = parsed.adblock.disabledSites.filter(
-            (site) => typeof site === 'string' && /^[a-z0-9.-]{1,253}$/i.test(site),
-          );
-        }
-      }
-      if (typeof parsed.bossKey === 'string' && parsed.bossKey.length <= 64) next.bossKey = parsed.bossKey;
-      if (parsed.shortcuts && typeof parsed.shortcuts === 'object') {
-        for (const action of Object.keys(DEFAULT_SHORTCUTS)) {
-          const value = parsed.shortcuts[action];
-          if (typeof value === 'string' && value.length <= 64) next.shortcuts[action] = value;
-        }
-      }
-      next.blockedTotal = Number.isFinite(parsed.blockedTotal) ? Math.max(0, Math.floor(parsed.blockedTotal)) : 0;
-    }
-  } catch {
-    // First run: defaults apply.
-  }
-  appSettings = next;
-  return next;
+  appSettings = loadSettings(appSettingsPath(), DEFAULT_APP_SETTINGS, Object.keys(DEFAULT_SHORTCUTS));
+  return appSettings;
 }
 
-let saveSettingsTimer = null;
-function saveAppSettings() {
-  if (saveSettingsTimer) clearTimeout(saveSettingsTimer);
-  saveSettingsTimer = setTimeout(() => {
-    try {
-      fs.writeFileSync(appSettingsPath(), JSON.stringify(appSettings, null, 2), 'utf8');
-    } catch {
-      // A read-only profile keeps settings in memory for this session.
-    }
-  }, 200);
+const saveAppSettings = createSettingsWriter(appSettingsPath, () => appSettings);
+
+function windowStatePath() {
+  return path.join(app.getPath('userData'), 'window-state.json');
+}
+
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  writeWindowState(windowStatePath(), mainWindow.getNormalBounds(), mainWindow.isMaximized());
+}
+
+function scheduleSaveWindowState() {
+  if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+  saveBoundsTimer = setTimeout(saveWindowState, 250);
 }
 
 function adblockOverview() {
@@ -443,331 +444,6 @@ function attachAdBlocking(targetSession) {
       return callback({ cancel: false });
     }
   });
-}
-
-function parseAccelerator(accelerator) {
-  if (typeof accelerator !== 'string' || !accelerator.trim()) return null;
-  const parts = accelerator.split('+').map((part) => part.trim()).filter(Boolean);
-  if (parts.length === 0) return null;
-  const key = parts.pop();
-  const parsed = { key: key.toLowerCase(), control: false, shift: false, alt: false, meta: false };
-  for (const part of parts) {
-    const lower = part.toLowerCase();
-    if (lower === 'ctrl' || lower === 'control') parsed.control = true;
-    else if (lower === 'shift') parsed.shift = true;
-    else if (lower === 'alt' || lower === 'option') parsed.alt = true;
-    else if (['meta', 'cmd', 'command', 'super', 'win'].includes(lower)) parsed.meta = true;
-    else return null;
-  }
-  return parsed;
-}
-
-function normalizeInputKey(key) {
-  const value = String(key || '').toLowerCase();
-  if (value === ' ' || value === 'spacebar' || value === 'space') return 'space';
-  return value;
-}
-
-function matchAccelerator(input, accelerator) {
-  const parsed = parseAccelerator(accelerator);
-  if (!parsed) return false;
-  if (normalizeInputKey(input.key) !== parsed.key) return false;
-  return Boolean(input.control) === parsed.control
-    && Boolean(input.meta) === parsed.meta
-    && Boolean(input.shift) === parsed.shift
-    && Boolean(input.alt) === parsed.alt;
-}
-
-function shortcutActionForInput(input) {
-  for (const [action, accelerator] of Object.entries(appSettings.shortcuts || {})) {
-    if (matchAccelerator(input, accelerator)) return action;
-  }
-  // F5 keeps working as a reload alias even though bindings are customizable.
-  if (normalizeInputKey(input.key) === 'f5' && !input.control && !input.alt && !input.meta && !input.shift) {
-    return 'reload';
-  }
-  return null;
-}
-
-function toggleBossMode() {
-  const windows = BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed());
-  if (windows.length === 0) return;
-  const visible = windows.filter((win) => win.isVisible() && !win.isMinimized());
-  if (visible.length > 0) {
-    for (const win of windows) win.hide();
-    return;
-  }
-  for (const win of windows) {
-    if (win.isMinimized()) win.restore();
-    win.show();
-  }
-  windows[windows.length - 1].focus();
-}
-
-function registerBossKey(accelerator) {
-  if (registeredBossKey) {
-    try {
-      globalShortcut.unregister(registeredBossKey);
-    } catch {
-      // The accelerator may already be released.
-    }
-    registeredBossKey = null;
-  }
-  if (typeof accelerator !== 'string' || !accelerator.trim()) return false;
-  try {
-    const registered = globalShortcut.register(accelerator, toggleBossMode);
-    if (registered) registeredBossKey = accelerator;
-    return registered;
-  } catch {
-    return false;
-  }
-}
-
-const TRANSLATION_TARGETS = new Set(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'ru']);
-
-async function fetchJson(url, timeoutMs = 12_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await net.fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Luma/1.0',
-        Accept: 'application/json',
-      },
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-let googleTranslationBlockedUntil = 0;
-
-async function translateChunk(text, target) {
-  if (Date.now() < googleTranslationBlockedUntil) throw new Error('google unavailable');
-  const endpoint = 'https://translate.googleapis.com/translate_a/single'
-    + `?client=gtx&sl=auto&tl=${encodeURIComponent(target)}&dt=t&q=${encodeURIComponent(text)}`;
-  const data = await fetchJson(endpoint, 5_000).catch((error) => {
-    // Remember the outage briefly so later chunks go straight to the fallback.
-    googleTranslationBlockedUntil = Date.now() + 10 * 60_000;
-    throw error;
-  });
-  const segments = Array.isArray(data?.[0]) ? data[0] : [];
-  const translated = segments
-    .map((segment) => (Array.isArray(segment) && typeof segment[0] === 'string' ? segment[0] : ''))
-    .join('');
-  if (!translated.trim()) throw new Error('empty translation');
-  return translated;
-}
-
-/** Rough script-based source detection for the MyMemory fallback. */
-function detectSourceLanguage(text) {
-  if (/[\u3040-\u30ff]/.test(text)) return 'ja';
-  if (/[\uac00-\ud7af]/.test(text)) return 'ko';
-  if (/[\u4e00-\u9fff]/.test(text)) return 'zh-CN';
-  if (/[\u0400-\u04ff]/.test(text)) return 'ru';
-  if (/[\u0600-\u06ff]/.test(text)) return 'ar';
-  if (/[\u0e00-\u0e7f]/.test(text)) return 'th';
-  return 'en';
-}
-
-function splitForTranslation(text, limit = 450) {
-  if (text.length <= limit) return [text];
-  const parts = [];
-  let rest = text;
-  while (rest.length > limit) {
-    const window = rest.slice(0, limit);
-    const cut = Math.max(
-      window.lastIndexOf('. '),
-      window.lastIndexOf('! '),
-      window.lastIndexOf('? '),
-      window.lastIndexOf('\n'),
-      window.lastIndexOf(' '),
-    );
-    const index = cut > limit * 0.4 ? cut + 1 : limit;
-    parts.push(rest.slice(0, index));
-    rest = rest.slice(index);
-  }
-  if (rest) parts.push(rest);
-  return parts;
-}
-
-/**
- * MyMemory is used when the Google endpoint is unreachable (for example on
- * mainland networks). It has no auto-detect, so the source script is guessed.
- */
-function decodeHtmlEntities(text) {
-  return text
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&');
-}
-
-async function translateWithMyMemory(text, target) {
-  const source = detectSourceLanguage(text);
-  if (source === target) return text;
-  const pieces = splitForTranslation(text);
-  const results = [];
-  for (const piece of pieces) {
-    const endpoint = 'https://api.mymemory.translated.net/get'
-      + `?q=${encodeURIComponent(piece)}&langpair=${encodeURIComponent(source)}|${encodeURIComponent(target)}`;
-    const data = await fetchJson(endpoint, 15_000);
-    const translated = data?.responseData?.translatedText;
-    if (typeof translated !== 'string' || !translated.trim()) throw new Error('empty translation');
-    if (/INVALID SOURCE LANGUAGE|QUERY LENGTH LIMIT|MYMEMORY WARNING/i.test(translated)) {
-      throw new Error('translation rejected');
-    }
-    results.push(decodeHtmlEntities(translated));
-  }
-  return results.join(' ');
-}
-
-async function translateTexts(texts, target) {
-  const cleanTarget = TRANSLATION_TARGETS.has(target) ? target : 'zh-CN';
-  const cleanTexts = texts
-    .filter((text) => typeof text === 'string' && text.trim())
-    .map((text) => text.slice(0, 4000))
-    .slice(0, 80);
-  if (cleanTexts.length === 0) return { ok: true, translations: [] };
-
-  const chunks = [];
-  let current = [];
-  let currentLength = 0;
-  for (const text of cleanTexts) {
-    if (current.length > 0 && (current.length >= 6 || currentLength + text.length > 1400)) {
-      chunks.push(current);
-      current = [];
-      currentLength = 0;
-    }
-    current.push(text);
-    currentLength += text.length + 1;
-  }
-  if (current.length > 0) chunks.push(current);
-
-  const translations = [];
-  let lastError = '';
-  for (const chunk of chunks) {
-    let translatedLines = null;
-    try {
-      const result = await translateChunk(chunk.join('\n'), cleanTarget);
-      const lines = result.split('\n');
-      if (lines.length === chunk.length) translatedLines = lines;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    if (translatedLines) {
-      translations.push(...translatedLines);
-      continue;
-    }
-    // Primary endpoint unavailable: fall back in parallel so long pages finish quickly.
-    const fallback = await Promise.all(chunk.map(async (text) => {
-      try {
-        return await translateWithMyMemory(text, cleanTarget);
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-        return text;
-      }
-    }));
-    translations.push(...fallback);
-  }
-  const source = detectSourceLanguage(cleanTexts.join(' '));
-  const succeeded = translations.some((text, index) => text !== cleanTexts[index]);
-  if (!succeeded) {
-    return {
-      ok: false,
-      error: source === cleanTarget ? 'same-language' : (lastError || 'translation unavailable'),
-      translations: [],
-    };
-  }
-  return { ok: true, translations };
-}
-
-function windowStatePath() {
-  return path.join(app.getPath('userData'), 'window-state.json');
-}
-
-function readWindowState() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(windowStatePath(), 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return null;
-    const bounds = parsed.bounds;
-    if (
-      !bounds ||
-      !Number.isFinite(bounds.width) ||
-      !Number.isFinite(bounds.height) ||
-      !Number.isFinite(bounds.x) ||
-      !Number.isFinite(bounds.y)
-    ) {
-      return null;
-    }
-    return { bounds, maximized: parsed.maximized === true };
-  } catch {
-    return null;
-  }
-}
-
-/** Accepts {screenX,screenY} or {x,y} and returns both spellings. */
-function normalizeScreenPoint(value) {
-  if (!value || typeof value !== 'object') return null;
-  const x = Number(value.screenX ?? value.x);
-  const y = Number(value.screenY ?? value.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x, y, screenX: x, screenY: y };
-}
-
-function normalizeExternalBounds(value) {
-  if (!value || typeof value !== 'object') return null;
-  const x = Math.round(Number(value.x));
-  const y = Math.round(Number(value.y));
-  const width = Math.round(Number(value.width));
-  const height = Math.round(Number(value.height));
-  if (![x, y, width, height].every(Number.isFinite)) return null;
-  return {
-    x,
-    y,
-    width: Math.max(380, Math.min(4000, width)),
-    height: Math.max(500, Math.min(4000, height)),
-  };
-}
-
-function normalizeWindowBounds(bounds) {
-  if (!bounds) return null;
-  const width = Math.max(DEFAULT_WINDOW_BOUNDS.minWidth, Math.round(bounds.width));
-  const height = Math.max(DEFAULT_WINDOW_BOUNDS.minHeight, Math.round(bounds.height));
-  const x = Math.round(bounds.x);
-  const y = Math.round(bounds.y);
-  const visible = screen.getAllDisplays().some((display) => {
-    const area = display.workArea;
-    return (
-      x < area.x + area.width - 80 &&
-      x + width > area.x + 80 &&
-      y < area.y + area.height - 40 &&
-      y + height > area.y + 40
-    );
-  });
-  return visible ? { x, y, width, height } : null;
-}
-
-function saveWindowState() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  try {
-    const bounds = mainWindow.getNormalBounds();
-    const maximized = mainWindow.isMaximized();
-    fs.writeFileSync(windowStatePath(), JSON.stringify({ bounds, maximized }), 'utf8');
-  } catch {
-    // A read-only profile must not break window controls.
-  }
-}
-
-function scheduleSaveWindowState() {
-  if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
-  saveBoundsTimer = setTimeout(saveWindowState, 250);
 }
 
 function safeOrigin(url) {
@@ -983,8 +659,8 @@ function createWindow({
     ? initialTabs
     : (initialTab ? [initialTab] : []);
   const isSecondaryWindow = tabs.length > 0;
-  const savedState = incognito || isSecondaryWindow ? null : readWindowState();
-  const savedBounds = incognito || isSecondaryWindow ? null : normalizeWindowBounds(savedState?.bounds);
+  const savedState = incognito || isSecondaryWindow ? null : readWindowState(windowStatePath());
+  const savedBounds = incognito || isSecondaryWindow ? null : normalizeWindowBounds(savedState?.bounds, DEFAULT_WINDOW_BOUNDS);
   const windowArguments = [];
   if (incognito) windowArguments.push('--luma-incognito');
   let windowInitialKey = null;
@@ -1676,11 +1352,42 @@ function attachPageFeatures(contents, { native = false } = {}) {
     if (input.type !== 'keyDown') return;
     // DevTools keeps its own keyboard handling.
     if (contents.getURL().startsWith('devtools://')) return;
-    const action = shortcutActionForInput(input);
+    const action = shortcutActionForInput(input, appSettings.shortcuts);
     if (!action) return;
     event.preventDefault();
     hostContentsOf(contents)?.send('browser:shortcut', action);
   });
+}
+
+/**
+ * Free-memory watchdog. Renderers decide what to discard, because the tab list
+ * and the user's "sleep background tabs" preference live there; the main process
+ * only supplies the signal and the numbers.
+ */
+function sampleMemoryPressure() {
+  let info = null;
+  try {
+    info = process.getSystemMemoryInfo();
+  } catch {
+    return;
+  }
+  const total = Number(info?.total) || 0;
+  const available = Number(info?.available ?? info?.free) || 0;
+  if (total <= 0) return;
+  const ratio = available / total;
+  if (ratio > MEMORY_PRESSURE_RATIO) return;
+  const now = Date.now();
+  if (now - lastMemoryPressureAt < MEMORY_PRESSURE_COOLDOWN_MS) return;
+  lastMemoryPressureAt = now;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('app:memory-pressure', {
+        available,
+        total,
+        ratio: Math.round(ratio * 1000) / 1000,
+      });
+    }
+  }
 }
 
 app.whenReady().then(() => {
@@ -1721,15 +1428,14 @@ app.whenReady().then(() => {
   browserSession = session.fromPartition(APP_PARTITION);
   incognitoSession = session.fromPartition(INCOGNITO_PARTITION);
   for (const targetSession of [browserSession, incognitoSession]) {
-    // Remove Electron's product token so standards-compliant sites receive a normal Chrome UA.
-    targetSession.setUserAgent(
-      targetSession.getUserAgent().replace(/\sElectron\/[\d.]+/i, '').replace(/Luma Browser\/[\d.]+/i, ''),
-    );
-    // Luma asks before granting camera, microphone, geolocation or notification access.
-    targetSession.setPermissionRequestHandler(handlePermissionRequest);
-    targetSession.setPermissionCheckHandler(handlePermissionCheck);
-    attachDownloadHandling(targetSession, targetSession === incognitoSession);
-    attachAdBlocking(targetSession);
+    configureSession(targetSession, {
+      // Luma asks before granting camera, microphone, geolocation or notifications.
+      onPermissionRequest: handlePermissionRequest,
+      onPermissionCheck: handlePermissionCheck,
+      // Blocked requests never reach the download handler.
+      onRequest: attachAdBlocking,
+      onDownload: (target) => attachDownloadHandling(target, target === incognitoSession),
+    });
   }
   loadPersistedDownloads();
   // Loading the cached engine is cheap; a stale/missing cache refreshes in the
@@ -1741,6 +1447,7 @@ app.whenReady().then(() => {
   adblockUpdateTimer = setInterval(() => {
     void adblockManager?.update(false);
   }, 6 * 60 * 60 * 1000);
+  memoryPressureTimer = setInterval(sampleMemoryPressure, MEMORY_PRESSURE_INTERVAL_MS);
 
   /**
  * Wires the browser-level behaviour shared by <webview> guests and native page
@@ -1783,7 +1490,7 @@ ipcMain.on('window:toggle-maximize', (event) => {
   if (win.isMaximized()) {
     win.unmaximize();
     if (win === mainWindow) {
-      const restored = normalizeWindowBounds(readWindowState()?.bounds);
+      const restored = normalizeWindowBounds(readWindowState(windowStatePath())?.bounds, DEFAULT_WINDOW_BOUNDS);
       if (restored) win.setBounds(restored);
     }
   } else {
@@ -2472,7 +2179,7 @@ ipcMain.handle('window:merge-tab', (event, payload, placement) => {
 });
 
 ipcMain.handle('settings:configure', (_event, payload) => {
-  if (!payload || typeof payload !== 'object') return { bossKeyRegistered: Boolean(registeredBossKey) };
+  if (!payload || typeof payload !== 'object') return { bossKeyRegistered: Boolean(currentBossKey()) };
   if (typeof payload.bossKey === 'string' && payload.bossKey.length <= 64) {
     appSettings.bossKey = payload.bossKey;
   }
@@ -2485,9 +2192,9 @@ ipcMain.handle('settings:configure', (_event, payload) => {
     appSettings.shortcuts = next;
   }
   saveAppSettings();
-  const registered = appSettings.bossKey !== registeredBossKey
+  const registered = appSettings.bossKey !== currentBossKey()
     ? registerBossKey(appSettings.bossKey)
-    : Boolean(registeredBossKey);
+    : Boolean(currentBossKey());
   return { bossKeyRegistered: registered };
 });
 
@@ -3232,6 +2939,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (adblockUpdateTimer) clearInterval(adblockUpdateTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
+  if (memoryPressureTimer) clearInterval(memoryPressureTimer);
   if (startupUpdateTimer) clearTimeout(startupUpdateTimer);
   // Deferred update, the same trade-off Sogou's QBDelayUpdate makes: a package
   // that finished downloading is installed once the last window is gone, so no

@@ -241,6 +241,22 @@ export function App() {
     setNativePageVisible(showDesktopWeb);
   }, [showDesktopWeb]);
 
+  // Chrome's Memory Saver equivalent: the main process samples free system
+  // memory and sends a signal; the renderer owns the tab list, so it decides
+  // which background tabs to discard, honouring the user's sleeping preference.
+  useEffect(() => {
+    if (!desktop?.onMemoryPressure) return undefined;
+    return desktop.onMemoryPressure(() => {
+      if (!browser.preferences.tabSleepEnabled) return;
+      browser.sleepBackgroundTabs();
+      browser.showToast({
+        tone: 'info',
+        title: '系统内存紧张',
+        description: '已休眠后台标签页以释放内存，切换回去时会重新加载。',
+      });
+    });
+  }, [desktop, browser.preferences.tabSleepEnabled, browser.sleepBackgroundTabs, browser.showToast]);
+
   useEffect(() => {
     if (!desktop) return undefined;
     let active = true;

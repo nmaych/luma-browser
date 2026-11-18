@@ -746,6 +746,13 @@ test('keeps the window alive when a bookmark folder is double-clicked', async ()
   const errors: string[] = [];
   const onPageError = (error: Error) => errors.push(error.message);
   page.on('pageerror', onPageError);
+  // Earlier tests may have switched the bookmarks bar off; the shortcut makes
+  // this test independent of what ran before it.
+  if (await page.locator('.bookmarks-bar').count() === 0) {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Control+Shift+B');
+    await expect(page.locator('.bookmarks-bar')).toBeVisible();
+  }
   await page.locator('.bookmarks-bar').getByRole('button', { name: /工作资料/ }).dblclick();
   await page.waitForTimeout(300);
   page.off('pageerror', onPageError);
@@ -1743,4 +1750,29 @@ test('captures a dragged-out region of the page', async () => {
     return image?.size ?? 0;
   });
   expect(clipboardBytes).toBeGreaterThan(0);
+});
+
+test('cycles tabs from the keyboard and opens one from the empty strip', async () => {
+  const countBefore = await page.locator('.browser-tab').count();
+  await page.getByRole('button', { name: '新建标签页 (Ctrl+T)' }).click();
+  await expect(page.locator('.browser-tab')).toHaveCount(countBefore + 1);
+
+  // Key events only reach the browser chrome when no page view holds focus.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const before = await activeTabId();
+  await page.keyboard.press('Control+Tab');
+  await expect.poll(() => activeTabId()).not.toBe(before);
+
+  await page.keyboard.press('Control+Shift+Tab');
+  await expect.poll(() => activeTabId()).toBe(before);
+
+  // Double-clicking the empty part of the strip is the Chrome shortcut for a
+  // new tab. The event is aimed at the strip itself, which is the empty area
+  // the handler checks for; earlier tests leave an unknown number of tabs open.
+  await page.evaluate(() => {
+    document.querySelector('.tab-list')?.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true, cancelable: true }),
+    );
+  });
+  await expect(page.locator('.browser-tab')).toHaveCount(countBefore + 2);
 });

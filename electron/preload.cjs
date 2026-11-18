@@ -42,6 +42,11 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
     ipcRenderer.on('updates:state', listener);
     return () => ipcRenderer.removeListener('updates:state', listener);
   },
+  onMemoryPressure: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on('app:memory-pressure', listener);
+    return () => ipcRenderer.removeListener('app:memory-pressure', listener);
+  },
   openIncognito: () => ipcRenderer.send('window:open-incognito'),
   openDownloads: () => ipcRenderer.send('window:open-downloads'),
   tearOffTab: (tab, point) => ipcRenderer.invoke('window:tear-off-tab', tab, point),
