@@ -6,6 +6,7 @@ const { shouldBlock, hostnameOf, AdblockManager, ruleCount: legacyAdblockRuleCou
 const passwordVault = require('./passwords.cjs');
 const { createPageViewManager } = require('./pageViews.cjs');
 const { createUpdater } = require('./updater.cjs');
+const { configureUserData } = require('./appPaths.cjs');
 const overlaySurface = require('./overlaySurface.cjs');
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -43,6 +44,12 @@ const DEFAULT_APP_SETTINGS = {
   shortcuts: { ...DEFAULT_SHORTCUTS },
   blockedTotal: 0,
 };
+
+// Chrome keeps program files and profile data in separate trees; Luma follows
+// the same split so an upgrade never rewrites the profile. Resolved before the
+// single-instance lock because that lock lives inside userData.
+const appPaths = configureUserData(app, { log: (line) => console.log(line) });
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 // A second process sharing the same userData would race on passwords.json,
 // settings and download records. Keep exactly one instance per profile.
@@ -249,6 +256,7 @@ let lastRendererCrashAt = 0;
 /** @type {ReturnType<typeof createUpdater> | null} */
 let updateManager = null;
 let startupUpdateTimer = null;
+let updateCheckTimer = null;
 
 function isFileUrl(url) {
   try {
@@ -1692,13 +1700,18 @@ app.whenReady().then(() => {
   updateManager = createUpdater({
     currentVersion: app.getVersion(),
     onState: broadcastUpdateState,
+    paths: appPaths,
   });
   if (!isDevelopment) {
-    // Checking after the first paint keeps startup fast and offline-safe. It
-    // only looks for a release; downloading waits for an explicit click.
-    startupUpdateTimer = setTimeout(() => {
-      void updateManager?.check({ autoDownload: false });
-    }, 8_000);
+    // Checking after the first paint keeps startup fast and offline-safe.
+    // Browsers poll their update service in the background instead of checking
+    // once at launch, so the same check repeats every four hours.
+    const backgroundCheck = () => {
+      const prefs = updateManager?.getState().prefs;
+      void updateManager?.check({ autoDownload: prefs?.autoDownload !== false });
+    };
+    startupUpdateTimer = setTimeout(backgroundCheck, 8_000);
+    updateCheckTimer = setInterval(backgroundCheck, UPDATE_CHECK_INTERVAL_MS);
   }
   adblockManager = new AdblockManager({
     userDataDir: app.getPath('userData'),
@@ -2558,6 +2571,17 @@ ipcMain.handle('updates:check', () => {
 });
 ipcMain.handle('updates:download', (_event, line) => updateManager?.download(line) ?? null);
 ipcMain.handle('updates:install', () => updateManager?.install() ?? false);
+ipcMain.handle('updates:prefs', () => updateManager?.getState().prefs ?? { autoDownload: true, applyOnQuit: true });
+ipcMain.handle('updates:set-prefs', (_event, patch) => updateManager?.setPrefs(patch) ?? null);
+// Chrome exposes chrome://version; the settings page shows the same three roots
+// so a user can find the profile, the update cache and the program directory.
+ipcMain.handle('app:paths', () => ({
+  install: app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath(),
+  userData: app.getPath('userData'),
+  update: appPaths.update,
+  log: appPaths.log,
+  isolated: appPaths.overridden,
+}));
 
 ipcMain.handle('app:versions', () => ({
   app: app.getVersion(),
@@ -3207,7 +3231,12 @@ ipcMain.handle('shell:open-external', (_event, url) => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (adblockUpdateTimer) clearInterval(adblockUpdateTimer);
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
   if (startupUpdateTimer) clearTimeout(startupUpdateTimer);
+  // Deferred update, the same trade-off Sogou's QBDelayUpdate makes: a package
+  // that finished downloading is installed once the last window is gone, so no
+  // file in the program directory is still locked by a running process.
+  updateManager?.installOnQuit();
   persistDownloadsNow();
 });
 

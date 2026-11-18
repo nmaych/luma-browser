@@ -177,8 +177,12 @@ function updateStatusText(state: LumaUpdateState | null, checking: boolean): str
       const progress = state.total > 0 ? ` ${state.percent}%` : '';
       return via ? `正在通过${via}下载新版本${progress}` : `正在下载新版本${progress}`;
     }
-    case 'downloaded':
-      return `新版本 ${state.version} 已下载，重启后自动安装。`;
+    case 'downloaded': {
+      const mode = state.prefs?.applyOnQuit === false
+        ? '点击“重启并安装”立即完成安装。'
+        : '关闭浏览器时会自动静默安装，下次启动即为新版本。';
+      return `新版本 ${state.version} 已下载，${mode}`;
+    }
     case 'not-available':
       return '当前已是最新版本。';
     case 'error':
@@ -249,6 +253,7 @@ export function SettingsPage({
   const [updateState, setUpdateState] = useState<LumaUpdateState | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateLine, setUpdateLine] = useState('github');
+  const [appPaths, setAppPaths] = useState<LumaAppPaths | null>(null);
   const engines = getAllSearchEngines(preferences.customSearchEngines);
   const currentEngine = engines.find((engine) => engine.id === preferences.searchEngine) ?? engines[0];
   const builtInHome = preferences.homePage === INTERNAL_ROUTES.home;
@@ -385,6 +390,17 @@ export function SettingsPage({
   }, [desktop]);
 
   useEffect(() => {
+    if (!desktop?.getAppPaths) return undefined;
+    let active = true;
+    void desktop.getAppPaths().then((value) => {
+      if (active && value) setAppPaths(value);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [desktop]);
+
+  useEffect(() => {
     if (!desktop?.getUpdateState) return undefined;
     let active = true;
     void desktop.getUpdateState().then((value) => {
@@ -419,6 +435,19 @@ export function SettingsPage({
       if (value) setUpdateState(value);
     } catch {
       // The state stream reports download failures.
+    }
+  };
+
+  const updatePrefs: LumaUpdatePrefs = updateState?.prefs ?? { autoDownload: true, applyOnQuit: true };
+
+  const changeUpdatePrefs = async (patch: Partial<LumaUpdatePrefs>) => {
+    if (!desktop?.setUpdatePrefs) return;
+    try {
+      const value = await desktop.setUpdatePrefs(patch);
+      if (value) setUpdateState(value);
+      else setUpdateState((current) => (current ? { ...current, prefs: { ...current.prefs, ...patch } } : current));
+    } catch {
+      // The state stream carries the authoritative values.
     }
   };
 
@@ -699,7 +728,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.13.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.14.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -1293,7 +1322,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.13.0'}</span>
+                    <span>版本 {appVersions?.app ?? '1.14.0'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>
@@ -1307,6 +1336,17 @@ export function SettingsPage({
                     <div><span>Node.js</span><strong>{appVersions?.node ?? '读取中…'}</strong></div>
                     <div><span>V8</span><strong>{appVersions?.v8 ?? '读取中…'}</strong></div>
                   </div>
+                </div>
+                <div className="settings-card">
+                  <div className="settings-card__title"><HardDrive size={18} /><div><h3>存储位置</h3><p>程序文件与用户数据分开存放：升级只替换程序目录，个人数据不会被动到。</p></div></div>
+                  <div className="path-grid">
+                    <div><span>程序目录</span><code>{appPaths?.install ?? '读取中…'}</code></div>
+                    <div><span>用户数据</span><code>{appPaths?.userData ?? '读取中…'}</code></div>
+                    <div><span>更新缓存与日志</span><code>{appPaths?.log ?? '读取中…'}</code></div>
+                  </div>
+                  {appPaths?.isolated && (
+                    <p className="update-hint">当前以自定义 <code>--user-data-dir</code> 运行，用户数据指向该目录，不再使用默认的 Luma Browser\User Data。</p>
+                  )}
                 </div>
                 <div className="settings-card">
                   <div className="settings-card__header">
@@ -1375,6 +1415,30 @@ export function SettingsPage({
                       镜像线路由第三方加速服务提供，下载完成后会按 GitHub 公布的 SHA256 校验；校验不一致时文件会被删除。
                     </p>
                   )}
+                  <div className="setting-row">
+                    <div><strong>后台自动下载更新</strong><p>发现新版本后在后台下载安装包，不打断当前浏览；下载完成后由你决定何时安装。</p></div>
+                    <label className="switch">
+                      <input
+                        aria-label="后台自动下载更新"
+                        type="checkbox"
+                        checked={updatePrefs.autoDownload}
+                        onChange={(event) => void changeUpdatePrefs({ autoDownload: event.target.checked })}
+                      />
+                      <span />
+                    </label>
+                  </div>
+                  <div className="setting-row">
+                    <div><strong>退出时自动安装</strong><p>关闭最后一个窗口时静默安装已下载的版本，下次启动即为新版本，不会打断浏览。</p></div>
+                    <label className="switch">
+                      <input
+                        aria-label="退出时自动安装"
+                        type="checkbox"
+                        checked={updatePrefs.applyOnQuit}
+                        onChange={(event) => void changeUpdatePrefs({ applyOnQuit: event.target.checked })}
+                      />
+                      <span />
+                    </label>
+                  </div>
                 </div>
                 <div className="settings-card">
                   <div className="settings-card__header">

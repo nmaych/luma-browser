@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { installerFileName, isNewerVersion, legacyInstallerFileName, parseVersion } = require('./versioning.cjs');
 
 const REPO = 'nmaych/luma-browser';
 const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -26,6 +27,10 @@ const DOWNLOAD_LINES = [
   { id: 'github', label: 'GitHub 直连' },
   { id: 'mirror', label: '镜像加速' },
 ];
+const STORE_FILE = 'update.json';
+const PREVIOUS_DIR = 'previous';
+const LOG_LIMIT_BYTES = 512 * 1024;
+const DEFAULT_PREFS = { autoDownload: true, applyOnQuit: true };
 
 function isTrustedDownloadUrl(value) {
   try {
@@ -37,23 +42,13 @@ function isTrustedDownloadUrl(value) {
   }
 }
 
-function parseVersion(value) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/i.exec(String(value ?? '').trim());
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
+function createUpdater({ currentVersion, onState, paths }) {
+  const updateDir = paths?.update ?? path.join(app.getPath('userData'), 'updates');
+  const packagesDir = paths?.packages ?? path.join(updateDir, 'packages');
+  const previousDir = path.join(packagesDir, PREVIOUS_DIR);
+  const logPath = paths?.log ?? path.join(updateDir, 'update.log');
+  const storePath = path.join(updateDir, STORE_FILE);
 
-function isNewerVersion(remote, local) {
-  const next = parseVersion(remote);
-  const current = parseVersion(local);
-  if (!next || !current) return false;
-  for (let index = 0; index < 3; index += 1) {
-    if (next[index] !== current[index]) return next[index] > current[index];
-  }
-  return false;
-}
-
-function createUpdater({ currentVersion, onState }) {
   let state = {
     status: 'idle',
     currentVersion,
@@ -65,6 +60,11 @@ function createUpdater({ currentVersion, onState }) {
     releaseUrl: `https://github.com/${REPO}/releases`,
     line: null,
     lines: [],
+    prefs: { ...DEFAULT_PREFS },
+    pending: null,
+    lastCheckedAt: null,
+    updateDir,
+    logPath,
   };
   /** @type {string | null} */
   let installerPath = null;
@@ -73,6 +73,17 @@ function createUpdater({ currentVersion, onState }) {
   let downloadRequest = null;
   let checking = false;
   let downloading = false;
+  // Guards the quit path: an immediate install already spawned the installer,
+  // and a second silent run during `will-quit` would race it.
+  let installerLaunched = false;
+
+  /** @type {{ lastCheckedAt: number, prefs: typeof DEFAULT_PREFS, pending: any, previous: any }} */
+  let store = {
+    lastCheckedAt: 0,
+    prefs: { ...DEFAULT_PREFS },
+    pending: null,
+    previous: null,
+  };
 
   const publish = (patch = {}) => {
     state = { ...state, ...patch };
@@ -87,11 +98,127 @@ function createUpdater({ currentVersion, onState }) {
   const userAgent = `Luma-Browser/${currentVersion}`;
 
   /**
-   * Resolves the latest release from the HTML releases page. `fallback` asks
-   * the caller to consult the REST API: a tag exists but the constructed asset
-   * URL did not answer, which usually means the release names its files
-   * differently. An empty list is authoritative — nothing is published yet.
+   * Chrome keeps a plain-text update log next to its downloaded packages; it is
+   * the only way to explain an update that silently did nothing.
    */
+  function log(message) {
+    try {
+      fs.mkdirSync(updateDir, { recursive: true });
+      try {
+        if (fs.statSync(logPath).size > LOG_LIMIT_BYTES) fs.renameSync(logPath, `${logPath}.1`);
+      } catch {
+        // No log yet.
+      }
+      fs.appendFileSync(logPath, `${new Date().toISOString()} [${currentVersion}] ${message}\n`, 'utf8');
+    } catch {
+      // Logging is best effort and must never break an update.
+    }
+  }
+
+  function normalizePending(value) {
+    if (!value || typeof value !== 'object') return null;
+    const version = String(value.version ?? '').trim();
+    if (!parseVersion(version)) return null;
+    const file = typeof value.file === 'string' ? value.file : '';
+    if (!file) return null;
+    return {
+      version,
+      file,
+      size: Number(value.size) || 0,
+      sha256: typeof value.sha256 === 'string' ? value.sha256.toLowerCase() : null,
+      downloadedAt: Number(value.downloadedAt) || 0,
+    };
+  }
+
+  function readStore() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+      if (!parsed || typeof parsed !== 'object') throw new Error('invalid store');
+      const prefs = parsed.prefs && typeof parsed.prefs === 'object' ? parsed.prefs : {};
+      return {
+        lastCheckedAt: Number(parsed.lastCheckedAt) || 0,
+        prefs: {
+          autoDownload: prefs.autoDownload !== false,
+          applyOnQuit: prefs.applyOnQuit !== false,
+        },
+        pending: normalizePending(parsed.pending),
+        previous: normalizePending(parsed.previous),
+      };
+    } catch {
+      return { lastCheckedAt: 0, prefs: { ...DEFAULT_PREFS }, pending: null, previous: null };
+    }
+  }
+
+  function writeStore() {
+    try {
+      fs.mkdirSync(updateDir, { recursive: true });
+      const temp = `${storePath}.tmp`;
+      fs.writeFileSync(temp, `${JSON.stringify({ schema: 1, ...store }, null, 2)}\n`, 'utf8');
+      fs.renameSync(temp, storePath);
+    } catch (error) {
+      log(`cannot persist update state: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function removeFile(target) {
+    try {
+      if (target && fs.existsSync(target)) fs.unlinkSync(target);
+    } catch {
+      // A locked file is retried on the next launch.
+    }
+  }
+
+  /**
+   * Startup reconciliation, the equivalent of Chrome's "Last Version" check:
+   * a pending installer for a version that is already running is deleted, so a
+   * failed or interrupted update never re-installs the same build forever.
+   */
+  function reconcile() {
+    store = readStore();
+    state = { ...state, prefs: { ...store.prefs }, lastCheckedAt: store.lastCheckedAt || null };
+    if (store.pending) {
+      const alreadyApplied = !isNewerVersion(store.pending.version, currentVersion);
+      if (alreadyApplied || !fs.existsSync(store.pending.file)) {
+        removeFile(store.pending.file);
+        if (alreadyApplied) log(`pending ${store.pending.version} is already applied`);
+        store.pending = null;
+        writeStore();
+      }
+    }
+    if (store.previous && !fs.existsSync(store.previous.file)) store.previous = null;
+    if (store.pending && isNewerVersion(store.pending.version, currentVersion)) {
+      // A package downloaded in a previous session keeps the “restart and
+      // install” affordance instead of looking like nothing happened.
+      installerPath = store.pending.file;
+      publish({
+        status: 'downloaded',
+        version: store.pending.version,
+        percent: 100,
+        transferred: store.pending.size,
+        total: store.pending.size,
+        pending: store.pending,
+        prefs: { ...store.prefs },
+        lastCheckedAt: store.lastCheckedAt || null,
+      });
+      return;
+    }
+    publish({ pending: store.pending, prefs: { ...store.prefs }, lastCheckedAt: store.lastCheckedAt || null });
+  }
+
+  function prunePackages(keepPaths) {
+    try {
+      for (const entry of fs.readdirSync(packagesDir)) {
+        const target = path.join(packagesDir, entry);
+        if (entry === PREVIOUS_DIR) continue;
+        if (keepPaths.includes(target)) continue;
+        removeFile(target);
+      }
+    } catch {
+      // Nothing downloaded yet.
+    }
+  }
+
+  /** Resolves the latest release from the HTML releases page. */
   async function releaseFromPage() {
     const response = await net.fetch(RELEASES_PAGE, {
       headers: { Accept: 'text/html', 'User-Agent': userAgent },
@@ -104,25 +231,30 @@ function createUpdater({ currentVersion, onState }) {
     const tag = decodeURIComponent(match[1]);
     const version = tag.replace(/^v/i, '');
     if (!parseVersion(version)) return { release: null, fallback: true };
-    const url = `https://github.com/${REPO}/releases/download/${encodeURIComponent(tag)}/Luma-Browser-Setup-${version}.exe`;
-    if (!isTrustedDownloadUrl(url)) return { release: null, fallback: true };
-    // The installer is named after the version by our release workflow; the
-    // probe confirms it exists and gives the progress bar its total size.
-    const head = await net.fetch(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': userAgent },
-    });
-    if (!head.ok) return { release: null, fallback: true };
-    return {
-      release: {
-        version,
-        url,
-        size: Number(head.headers.get('content-length')) || 0,
-        notes: '',
-        releaseUrl: `https://github.com/${REPO}/releases/tag/${encodeURIComponent(tag)}`,
-      },
-      fallback: false,
-    };
+    // Releases before 1.14 shipped `Luma-Browser-Setup-<version>.exe`; probe both
+    // names so an older install can still reach the newest package.
+    const names = [installerFileName(version), legacyInstallerFileName(version)];
+    for (const name of names) {
+      const url = `https://github.com/${REPO}/releases/download/${encodeURIComponent(tag)}/${name}`;
+      if (!isTrustedDownloadUrl(url)) continue;
+      const head = await net.fetch(url, {
+        method: 'HEAD',
+        headers: { 'User-Agent': userAgent },
+      });
+      if (!head.ok) continue;
+      return {
+        release: {
+          version,
+          url,
+          name,
+          size: Number(head.headers.get('content-length')) || 0,
+          notes: '',
+          releaseUrl: `https://github.com/${REPO}/releases/tag/${encodeURIComponent(tag)}`,
+        },
+        fallback: false,
+      };
+    }
+    return { release: null, fallback: true };
   }
 
   /** Fallback for a changed download name: the REST API lists the assets. */
@@ -139,12 +271,13 @@ function createUpdater({ currentVersion, onState }) {
     const version = String(release.tag_name || release.name || '').replace(/^v/i, '').trim();
     if (!parseVersion(version)) return null;
     const assets = Array.isArray(release.assets) ? release.assets : [];
-    const asset = assets.find((item) => /^Luma-Browser-Setup-.*\.exe$/i.test(item?.name || ''))
+    const asset = assets.find((item) => /^Luma-?Browser-Setup-.*\.exe$/i.test(item?.name || ''))
       ?? assets.find((item) => /\.exe$/i.test(item?.name || ''));
     if (!asset || !isTrustedDownloadUrl(asset.browser_download_url)) return null;
     return {
       version,
       url: asset.browser_download_url,
+      name: asset.name,
       size: Number(asset.size) || 0,
       notes: typeof release.body === 'string' ? release.body.slice(0, 4000) : '',
       releaseUrl: typeof release.html_url === 'string' ? release.html_url : state.releaseUrl,
@@ -163,8 +296,7 @@ function createUpdater({ currentVersion, onState }) {
   }
 
   function installerFileFor(version) {
-    const safeVersion = String(version).replace(/[^\d.]/g, '') || 'latest';
-    return path.join(app.getPath('temp'), `Luma-Browser-Setup-${safeVersion}.exe`);
+    return path.join(packagesDir, installerFileName(version));
   }
 
   /** SHA256 GitHub publishes for the release asset, used to vet mirror copies. */
@@ -181,7 +313,7 @@ function createUpdater({ currentVersion, onState }) {
       const tag = String(release?.tag_name || release?.name || '').replace(/^v/i, '').trim();
       if (tag !== version) return null;
       const assets = Array.isArray(release?.assets) ? release.assets : [];
-      const asset = assets.find((item) => /^Luma-Browser-Setup-.*\.exe$/i.test(item?.name || ''));
+      const asset = assets.find((item) => /^Luma-?Browser-Setup-.*\.exe$/i.test(item?.name || ''));
       const digest = String(asset?.digest || '');
       return /^sha256:[0-9a-f]{64}$/i.test(digest) ? digest.slice(7).toLowerCase() : null;
     } catch {
@@ -206,6 +338,7 @@ function createUpdater({ currentVersion, onState }) {
     }
     downloading = true;
     installerPath = installerFileFor(release.version);
+    log(`downloading ${release.version} via ${line} -> ${installerPath}`);
     publish({
       status: 'downloading',
       version: release.version,
@@ -230,9 +363,10 @@ function createUpdater({ currentVersion, onState }) {
 
       let request;
       try {
-        fs.mkdirSync(path.dirname(installerPath), { recursive: true });
+        fs.mkdirSync(packagesDir, { recursive: true });
         request = net.request({ url, method: 'GET', redirect: 'follow' });
       } catch (error) {
+        log(`download failed: ${error instanceof Error ? error.message : String(error)}`);
         finish({ status: 'error', error: error instanceof Error ? error.message : 'download failed' });
         return;
       }
@@ -240,6 +374,7 @@ function createUpdater({ currentVersion, onState }) {
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
+          log(`download rejected: HTTP ${response.statusCode}`);
           finish({ status: 'error', error: `HTTP ${response.statusCode}` });
           try {
             request.abort();
@@ -288,20 +423,41 @@ function createUpdater({ currentVersion, onState }) {
             }
             const digest = hasher.digest('hex');
             if (expectedDigest && digest !== expectedDigest) {
-              try {
-                fs.unlinkSync(installerPath);
-              } catch {
-                // The download is discarded regardless.
-              }
+              removeFile(installerPath);
+              log(`digest mismatch for ${release.version}; package deleted`);
               finish({ status: 'error', error: '安装包校验失败，文件已删除，请更换线路重试' });
               return;
             }
+            // Keep exactly one previous package: that is the rollback target if
+            // the new build misbehaves, mirroring how Chrome retains its last
+            // working version directory.
+            if (store.pending && store.pending.file !== installerPath) {
+              try {
+                fs.mkdirSync(previousDir, { recursive: true });
+                const rollback = path.join(previousDir, path.basename(store.pending.file));
+                fs.renameSync(store.pending.file, rollback);
+                store.previous = { ...store.pending, file: rollback };
+              } catch {
+                // A missing previous package only costs rollback, not the update.
+              }
+            }
+            store.pending = {
+              version: release.version,
+              file: installerPath,
+              size: fs.statSync(installerPath).size,
+              sha256: digest,
+              downloadedAt: Date.now(),
+            };
+            writeStore();
+            prunePackages([installerPath]);
+            log(`downloaded ${release.version} (${digest.slice(0, 12)}…)`);
             finish({
               status: 'downloaded',
               percent: 100,
               transferred: total || transferred,
               total: total || transferred,
               error: null,
+              pending: store.pending,
             });
           });
         });
@@ -322,14 +478,18 @@ function createUpdater({ currentVersion, onState }) {
     publish({ status: 'checking', error: null, percent: 0 });
     try {
       const release = await fetchLatestRelease();
+      store.lastCheckedAt = Date.now();
+      writeStore();
       if (!release) {
         // GitHub answered but has no published release; the installed build is
         // already the newest one that can be distributed.
         latestRelease = null;
-        return publish({ status: 'not-available', version: null, lines: [], line: null, error: null });
+        log('check: no published release');
+        return publish({ status: 'not-available', version: null, lines: [], line: null, error: null, lastCheckedAt: store.lastCheckedAt });
       }
       if (!isNewerVersion(release.version, currentVersion)) {
         latestRelease = null;
+        log(`check: up to date (${currentVersion})`);
         return publish({
           status: 'not-available',
           version: release.version,
@@ -337,9 +497,11 @@ function createUpdater({ currentVersion, onState }) {
           lines: [],
           line: null,
           error: null,
+          lastCheckedAt: store.lastCheckedAt,
         });
       }
       latestRelease = release;
+      log(`check: ${release.version} available`);
       publish({
         status: 'available',
         version: release.version,
@@ -349,11 +511,13 @@ function createUpdater({ currentVersion, onState }) {
         lines: DOWNLOAD_LINES,
         line: null,
         error: null,
+        lastCheckedAt: store.lastCheckedAt,
       });
       if (autoDownload) return await startDownload(release);
       return { ...state };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      log(`check failed: ${message}`);
       const friendly = message === 'fetch failed'
         ? '更新服务器连接失败'
         : /^HTTP 403\b/.test(message)
@@ -382,6 +546,20 @@ function createUpdater({ currentVersion, onState }) {
       .catch((error) => publish({ status: 'error', error: error?.message || '下载失败' }));
   }
 
+  function launchInstaller({ relaunch }) {
+    // electron-builder's installer relaunches the app after a silent install
+    // when it is started with --force-run, so the window comes back by itself
+    // once the files are replaced.
+    const args = relaunch ? ['/S', '--force-run'] : ['/S'];
+    const child = spawn(installerPath, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    installerLaunched = true;
+  }
+
   function install() {
     if (!app.isPackaged || state.status !== 'downloaded') return false;
     if (!installerPath || !fs.existsSync(installerPath)) {
@@ -389,16 +567,10 @@ function createUpdater({ currentVersion, onState }) {
       return false;
     }
     try {
-      // electron-builder's installer relaunches the app after a silent install
-      // when it is started with --force-run, so the window comes back by itself
-      // once the files are replaced.
-      const child = spawn(installerPath, ['/S', '--force-run'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      child.unref();
+      log(`installing ${state.version} now`);
+      launchInstaller({ relaunch: true });
     } catch (error) {
+      log(`install failed: ${error instanceof Error ? error.message : String(error)}`);
       publish({ status: 'error', error: error instanceof Error ? error.message : '无法启动安装程序' });
       return false;
     }
@@ -406,11 +578,54 @@ function createUpdater({ currentVersion, onState }) {
     return true;
   }
 
+  /**
+   * Sogou's QBDelayUpdate applies a downloaded build when the browser closes.
+   * Doing the same here means the 118 MB package is fetched in the background
+   * and the swap happens while no Luma process holds the locked binaries.
+   */
+  function installOnQuit() {
+    if (!app.isPackaged || installerLaunched) return false;
+    const pending = store.pending;
+    if (!pending || !store.prefs.applyOnQuit) return false;
+    if (!isNewerVersion(pending.version, currentVersion)) return false;
+    if (!fs.existsSync(pending.file)) return false;
+    installerPath = pending.file;
+    try {
+      log(`installing ${pending.version} on quit`);
+      launchInstaller({ relaunch: false });
+      return true;
+    } catch (error) {
+      log(`deferred install failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
+  function setPrefs(patch) {
+    const next = { ...store.prefs };
+    if (patch && typeof patch.autoDownload === 'boolean') next.autoDownload = patch.autoDownload;
+    if (patch && typeof patch.applyOnQuit === 'boolean') next.applyOnQuit = patch.applyOnQuit;
+    if (next.autoDownload === store.prefs.autoDownload && next.applyOnQuit === store.prefs.applyOnQuit) {
+      return { ...state };
+    }
+    store.prefs = next;
+    writeStore();
+    log(`preferences autoDownload=${next.autoDownload} applyOnQuit=${next.applyOnQuit}`);
+    publish({ prefs: { ...next } });
+    // Turning background downloads on while a newer build is already known
+    // should start the download without waiting for the next check.
+    if (next.autoDownload && state.status === 'available' && latestRelease) {
+      void startDownload(latestRelease);
+    }
+    return { ...state };
+  }
+
   function getState() {
     return { ...state };
   }
 
-  return { check, download, install, getState };
+  reconcile();
+
+  return { check, download, install, installOnQuit, setPrefs, getState, reconcile };
 }
 
-module.exports = { createUpdater };
+module.exports = { createUpdater, installerFileName };

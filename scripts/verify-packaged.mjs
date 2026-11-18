@@ -5,16 +5,20 @@ import { _electron as electron } from '@playwright/test';
 
 const root = path.resolve(import.meta.dirname, '..');
 const releaseRoot = path.join(root, 'release');
+// 1.14 renamed the entry point from `Luma Browser.exe` to `LumaBrowser.exe`;
+// older builds stay launchable so the script can verify a previous release too.
+const EXECUTABLE_NAMES = ['LumaBrowser.exe', 'Luma Browser.exe'];
+const executablesIn = (directory) => EXECUTABLE_NAMES.map((name) => path.join(directory, name));
 const versionedApps = existsSync(releaseRoot)
   ? readdirSync(releaseRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && /^\d+\.\d+\.\d+$/.test(entry.name))
       .sort((left, right) => right.name.localeCompare(left.name, undefined, { numeric: true }))
-      .map((entry) => path.join(releaseRoot, entry.name, 'win-unpacked', 'Luma Browser.exe'))
+      .flatMap((entry) => executablesIn(path.join(releaseRoot, entry.name, 'win-unpacked')))
   : [];
 const candidates = [
   process.env.LUMA_APP_PATH,
   ...versionedApps,
-  path.join(root, 'release', 'win-unpacked', 'Luma Browser.exe'),
+  ...executablesIn(path.join(root, 'release', 'win-unpacked')),
 ].filter(Boolean);
 const executablePath = candidates.find((candidate) => existsSync(candidate));
 if (!executablePath) throw new Error('No packaged Luma Browser executable found. Run npm run dist first.');

@@ -4,6 +4,34 @@
 存储或 IPC 不兼容变更提升 MAJOR。每个版本只发布一次，并同步更新 `package.json`、
 设置页版本兜底值与 `release/<version>/` 目录。
 
+## 1.14.0
+
+目录布局、文件命名和更新流程向 Chrome、搜狗浏览器等主流实现看齐，实测结论与对照表见
+[docs/browser-layout-and-updates.md](docs/browser-layout-and-updates.md)。
+
+新增：
+
+- **程序与数据分离的目录布局**：用户数据从 `%APPDATA%\Luma Browser` 搬到
+  `%LOCALAPPDATA%\Luma Browser\User Data`，更新缓存与日志在同级的 `Update\`，
+  与 Chrome 的 `LocalAppData\<Vendor>\User Data` 一致。1.13 及更早的配置会在首次启动时自动迁移：
+  同盘直接改名，跨盘或文件被占用时复制状态文件并跳过可重建的缓存目录，原目录保持不动。
+- **后台轮询 + 延迟安装**：启动 8 秒后检查一次，此后每 4 小时检查；发现新版本默认在后台下载，
+  **关闭最后一个窗口时静默安装**，下次启动即新版本（与搜狗 `QBDelayUpdate` 的取舍一致），
+  也可点“重启并安装”立即升级。设置页新增“后台自动下载更新”“退出时自动安装”两个开关。
+- **更新日志与回滚**：`Update\update.log` 记录检查、下载、安装全过程，超过 512 KB 轮转为 `.1`；
+  `Update\packages\previous\` 保留上一版安装包，新版本异常时可装回。
+- **存储位置展示**：设置 → 数据与关于新增“存储位置”，显示程序目录、用户数据目录与更新日志路径；
+  以 `--user-data-dir` 运行时明确标注为隔离配置。
+
+调整：
+
+- **可执行文件命名**：`Luma Browser.exe` → `LumaBrowser.exe`，去掉空格，与 `chrome.exe`、
+  `SogouExplorer.exe` 的习惯一致；快捷方式仍显示 “Luma Browser”。
+- **安装包命名**：`Luma-Browser-Setup-<version>-x64.exe`，带上架构；构建额外产出 `checksums.txt`
+  列出各产物的 SHA256。更新器同时探测旧命名，1.13 用户仍能收到本次更新。
+- **更新状态持久化**：`Update\update.json` 记录上次检查时间、更新偏好与待安装包；
+  启动时清理“已应用”或“文件已丢失”的待安装记录，避免反复安装同一版本。
+
 ## 1.13.0
 
 新增：

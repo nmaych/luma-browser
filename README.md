@@ -9,12 +9,34 @@
 Windows 安装包构建完成后位于：
 
 ```text
-release/1.13.0/Luma-Browser-Setup-1.13.0.exe
+release/1.14.0/Luma-Browser-Setup-1.14.0-x64.exe
 ```
 
-双击安装程序即可完成安装。安装程序支持选择安装目录，并会创建桌面与开始菜单快捷方式，无需管理员权限。
+双击安装程序即可完成安装。安装程序支持选择安装目录，并会创建桌面与开始菜单快捷方式，无需管理员权限。主程序文件名为 `LumaBrowser.exe`（无空格，与 `chrome.exe`、`SogouExplorer.exe` 的习惯一致），快捷方式仍显示 “Luma Browser”。
 
-已发布的版本可在 [GitHub Releases](https://github.com/nmaych/luma-browser/releases/latest) 直接下载：Release 附件同时包含 `Luma-Browser-Setup-<version>.exe`、`latest.yml` 与 `.blockmap`，`latest.yml` 是应用内自动更新的版本索引，缺少它旧版本就无法检测到更新。
+已发布的版本可在 [GitHub Releases](https://github.com/nmaych/luma-browser/releases/latest) 直接下载：Release 附件包含 `Luma-Browser-Setup-<version>-x64.exe`、`latest.yml`、`.blockmap` 与 `checksums.txt`。`latest.yml` 是应用内自动更新的版本索引，`checksums.txt` 列出每个产物的 SHA256。
+
+## 目录布局
+
+程序文件与用户数据分开存放，与 Chrome、搜狗浏览器一致：升级只替换程序目录，个人数据不受影响。
+
+```text
+<安装目录>\                          程序文件
+├─ LumaBrowser.exe
+├─ resources\app.asar
+└─ locales\
+
+%LOCALAPPDATA%\Luma Browser\
+├─ User Data\                        用户数据（配置、Cookie、书签、密码）
+└─ Update\                           更新
+   ├─ update.json                     检查时间、更新偏好、待安装包
+   ├─ update.log                      更新日志（超出 512 KB 轮转）
+   └─ packages\
+      ├─ Luma-Browser-Setup-1.14.0-x64.exe
+      └─ previous\                   上一版安装包，用于回滚
+```
+
+1.13 及更早版本把用户数据放在 `%APPDATA%\Luma Browser`。1.14 首次启动时会把它移动到新位置：同盘直接改名（瞬间完成），跨盘或文件被占用时复制状态文件并跳过可重建的缓存目录，原目录保持不动。显式传入 `--user-data-dir`（测试与便携运行）时完全遵循环调用方。细节见 [docs/browser-layout-and-updates.md](docs/browser-layout-and-updates.md)。
 
 开发环境也可以直接启动未打包的应用：
 
@@ -75,7 +97,7 @@ npm start
 - **设置中心**：左侧分组导航与分类搜索，包含通用、标签页与地址栏、搜索引擎、快捷键、广告拦截、密码填充、权限管理、隐私安全和数据与关于；网站数据可按网站查看 Cookie、存储与缓存并单独清除。
 - **安全隔离**：所有网页运行在沙盒 WebView 中，禁用 Node.js，阻止非 HTTP(S) 导航，默认拒绝摄像头、麦克风、定位和通知权限；界面启用严格 CSP，应用使用单实例锁避免多进程并发写同一份用户数据。
 - **明确反馈**：加载进度、页面标题/网址同步、Toast、空状态、断网与 DNS/服务器错误页。
-- **版本信息与自动更新**：设置 → 数据与关于展示应用版本与运行时版本；安装版启动后自动检查 GitHub Releases 上的新版本，在后台下载安装包，点“重启并安装”后会静默安装并**自动重新启动**，也可手动检查更新。
+- **版本信息与自动更新**：设置 → 数据与关于展示应用版本、运行时版本与三处存储位置；安装版启动 8 秒后检查一次，此后每 4 小时轮询 GitHub Releases。发现新版本默认在后台下载（可关闭），下载完成后可点“重启并安装”立即升级，默认则在**关闭最后一个窗口时静默安装**，下次启动即为新版本；`Update\update.log` 记录全过程，`packages\previous\` 保留上一版安装包用于回滚。
 - **统一右键菜单**：网页和内置页面（新标签页、书签、历史、设置）使用同一套右键菜单，包含前进后退、重新加载、打印、另存为 PDF、网页截图、复制/粘贴/全选、添加书签、复制地址与在系统浏览器中打开；内置页面按能力自动隐藏打印与截图项。
 - **个性化**：浅色、深色、跟随系统、默认搜索引擎、书签栏开关、减少动态效果。
 - **响应式窗口**：宽屏使用完整标签栏；窄窗口切换为移动式底部导航与标签总览。
@@ -169,8 +191,10 @@ npm run dist:dir
 输出目录：
 
 - `dist/`：React 渲染层静态文件
-- `release/1.13.0/win-unpacked/`：可直接运行的免安装应用目录
-- `release/1.13.0/Luma-Browser-Setup-1.13.0.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `1E0D0B5D47FE47B7A2D57AE0228BA4B91B5CD340B013941D7F30A117F5374401`）
+- `release/1.14.0/win-unpacked/`：可直接运行的免安装应用目录（入口 `LumaBrowser.exe`）
+- `release/1.14.0/Luma-Browser-Setup-1.14.0-x64.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `28AFD7DA02218A70923F497A976583A1885FA522F339D95AA640E83AABE1D12D`）
+- `release/1.14.0/latest.yml`、`.blockmap`：自动更新索引与增量更新差异图
+- `release/1.14.0/checksums.txt`：各产物的 SHA256 清单（由 `npm run dist` 自动生成）
 - `build/`：应用 PNG/ICO 图标
 
 每次构建成功后，脚本会自动删除旧版本遗留的 `win-unpacked` 免安装目录（保留各版本的安装程序），当前版本的免安装目录会保留用于冒烟验证。清理先用递归删除，失败时逐文件删除；仍被占用时会跳过并在下次构建重试，也可以手动执行 `npm run clean:release`。
@@ -186,7 +210,7 @@ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-
 ## 测试
 
 ```bash
-# 39 项 Vitest 单元与界面集成测试
+# 52 项 Vitest 单元与界面集成测试
 npm test
 
 # Web 预览层响应式与交互测试（5 项）

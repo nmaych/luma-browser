@@ -65,6 +65,19 @@ interface LumaUpdateLine {
   label: string;
 }
 
+interface LumaUpdatePrefs {
+  autoDownload: boolean;
+  applyOnQuit: boolean;
+}
+
+interface LumaUpdatePending {
+  version: string;
+  file: string;
+  size: number;
+  sha256: string | null;
+  downloadedAt: number;
+}
+
 interface LumaUpdateState {
   status: LumaUpdateStatus;
   currentVersion: string;
@@ -76,6 +89,19 @@ interface LumaUpdateState {
   releaseUrl: string;
   line: string | null;
   lines: LumaUpdateLine[];
+  prefs: LumaUpdatePrefs;
+  pending: LumaUpdatePending | null;
+  lastCheckedAt: number | null;
+  updateDir: string;
+  logPath: string;
+}
+
+interface LumaAppPaths {
+  install: string;
+  userData: string;
+  update: string;
+  log: string;
+  isolated: boolean;
 }
 
 interface LumaAdblockState {
@@ -194,6 +220,9 @@ interface LumaDesktopApi {
   checkForUpdates: () => Promise<LumaUpdateState | null>;
   downloadUpdate: (line?: string) => Promise<LumaUpdateState | null>;
   installUpdate: () => Promise<boolean>;
+  getUpdatePrefs: () => Promise<LumaUpdatePrefs | null>;
+  setUpdatePrefs: (patch: Partial<LumaUpdatePrefs>) => Promise<LumaUpdateState | null>;
+  getAppPaths: () => Promise<LumaAppPaths | null>;
   onUpdateState: (callback: (state: LumaUpdateState) => void) => () => void;
   openIncognito: () => void;
   openDownloads: () => void;

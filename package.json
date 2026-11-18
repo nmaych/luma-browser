@@ -1,7 +1,7 @@
 {
   "name": "luma-browser",
   "productName": "Luma Browser",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "private": true,
   "description": "A lightweight standalone Electron web browser with real tabbed browsing.",
   "author": "Luma Browser",
@@ -29,6 +29,7 @@
   "build": {
     "appId": "com.luma.browser",
     "productName": "Luma Browser",
+    "executableName": "LumaBrowser",
     "copyright": "Copyright © 2026 Luma Browser",
     "asar": true,
     "directories": {
@@ -51,7 +52,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Luma-Browser-Setup-${version}.${ext}"
+      "artifactName": "Luma-Browser-Setup-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
