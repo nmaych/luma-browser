@@ -287,6 +287,9 @@ let lastMemoryPressureAt = 0;
 let extensionManager = null;
 /** Extensions follow the profile: an isolated --user-data-dir gets its own set. */
 let extensionsDirectory = null;
+/** Floating host window for `chrome.action.default_popup`. */
+let extensionPopupWindow = null;
+let extensionPopupOwner = null;
 
 function isFileUrl(url) {
   try {
@@ -1452,6 +1455,11 @@ app.whenReady().then(() => {
     directory: extensionsDirectory,
     session: browserSession,
     log: (line) => console.log(line),
+    onChange: (list) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('extensions:changed', list);
+      }
+    },
   });
   void extensionManager.loadAll().catch((error) => {
     console.error('[extensions] load failed:', error);
@@ -2301,6 +2309,138 @@ ipcMain.handle('updates:prefs', () => updateManager?.getState().prefs ?? { autoD
 ipcMain.handle('updates:set-prefs', (_event, patch) => updateManager?.setPrefs(patch) ?? null);
 // Chrome exposes chrome://version; the settings page shows the same three roots
 // so a user can find the profile, the update cache and the program directory.
+function closeExtensionPopup() {
+  if (!extensionPopupWindow) return false;
+  const win = extensionPopupWindow;
+  extensionPopupWindow = null;
+  extensionPopupOwner = null;
+  try {
+    if (!win.isDestroyed()) win.destroy();
+  } catch {
+    // Already gone.
+  }
+  return true;
+}
+
+/**
+ * Hosts an extension popup in its own frameless window.
+ *
+ * A popup has to run as an extension page (`chrome-extension://…`) so its
+ * `chrome.*` calls work, which rules out rendering it inside the React UI. A
+ * child window positioned under the toolbar icon keeps the extension origin
+ * intact and cannot be covered by the native page view.
+ */
+async function openExtensionPopup(extensionId, anchor) {
+  if (!extensionManager) return { ok: false, error: '扩展管理器尚未就绪' };
+  const entry = extensionManager.list().find((item) => item.id === extensionId);
+  if (!entry) return { ok: false, error: '扩展不存在' };
+  const popupUrl = entry.toolbar?.popup;
+  if (!popupUrl) return { ok: false, error: '这个扩展没有弹窗界面' };
+  if (extensionPopupWindow && extensionPopupOwner === extensionId) {
+    closeExtensionPopup();
+    return { ok: true, closed: true };
+  }
+  closeExtensionPopup();
+
+  const point = normalizeScreenPoint(anchor);
+  const width = 420;
+  const height = 520;
+  const display = screen.getDisplayNearestPoint(point ?? screen.getCursorScreenPoint());
+  const area = display.workArea;
+  const anchorHeight = Number(anchor?.height) || 30;
+  const desiredX = Math.round(Math.min(
+    Math.max(area.x + 8, (point?.x ?? area.x) - 10),
+    area.x + area.width - width - 8,
+  ));
+  const desiredY = Math.round(Math.min(
+    Math.max(area.y + 8, (point?.y ?? area.y) + anchorHeight + 8),
+    area.y + area.height - height - 8,
+  ));
+
+  const win = new BrowserWindow({
+    x: desiredX,
+    y: desiredY,
+    width,
+    height,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    parent: mainWindow ?? undefined,
+    title: entry.name,
+    webPreferences: {
+      session: browserSession,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+  extensionPopupWindow = win;
+  extensionPopupOwner = extensionId;
+
+  let ready = false;
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.once('did-finish-load', () => {
+    void (async () => {
+      try {
+        const size = await win.webContents.executeJavaScript(`(() => {
+          // Chrome sizes a popup to its content; body's rect is the closest
+          // equivalent, because scrollHeight of a short page equals the viewport.
+          const root = document.documentElement;
+          const body = document.body;
+          const rect = body?.getBoundingClientRect();
+          return {
+            w: Math.ceil(rect?.width || body?.scrollWidth || root?.scrollWidth || 0),
+            h: Math.ceil(rect?.height || body?.scrollHeight || root?.scrollHeight || 0),
+          };
+        })()`, true);
+        const nextWidth = Math.min(760, Math.max(220, Number(size?.w) || width));
+        const nextHeight = Math.min(620, Math.max(120, Number(size?.h) || height));
+        const clampedX = Math.min(desiredX, area.x + area.width - nextWidth - 8);
+        const clampedY = Math.min(desiredY, area.y + area.height - nextHeight - 8);
+        win.setBounds({ x: Math.round(clampedX), y: Math.round(clampedY), width: nextWidth, height: nextHeight });
+      } catch {
+        // Keep the default size when the popup cannot be measured.
+      }
+      if (win.isDestroyed()) return;
+      win.show();
+      win.focus();
+      // Ignore the blur that fires while the window is still being focused.
+      setTimeout(() => { ready = true; }, 250);
+    })();
+  });
+  win.webContents.on('did-fail-load', () => closeExtensionPopup());
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      event.preventDefault();
+      closeExtensionPopup();
+    }
+  });
+  win.on('blur', () => {
+    if (ready) closeExtensionPopup();
+  });
+  win.on('closed', () => {
+    if (extensionPopupWindow === win) {
+      extensionPopupWindow = null;
+      extensionPopupOwner = null;
+    }
+  });
+
+  try {
+    await win.loadURL(popupUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    closeExtensionPopup();
+    return { ok: false, error: `弹窗加载失败：${message}` };
+  }
+  return { ok: true, opened: true };
+}
+
 ipcMain.handle('extensions:list', () => extensionManager?.list() ?? []);
 ipcMain.handle('extensions:install', async (event, sourcePath) => {
   if (!extensionManager) return { ok: false, error: '扩展管理器尚未就绪', list: [] };
@@ -2328,6 +2468,8 @@ ipcMain.handle('extensions:reload', (_event, id) => (
 ipcMain.handle('extensions:remove', (_event, id) => (
   extensionManager ? extensionManager.remove(id) : { ok: false, list: [] }
 ));
+ipcMain.handle('extensions:popup', (_event, id, anchor) => openExtensionPopup(id, anchor));
+ipcMain.handle('extensions:close-popup', () => closeExtensionPopup());
 ipcMain.handle('extensions:open-folder', async () => {
   const target = extensionsDirectory ?? appPaths.extensions;
   try {
@@ -3001,6 +3143,7 @@ app.on('will-quit', () => {
   // Deferred update, the same trade-off Sogou's QBDelayUpdate makes: a package
   // that finished downloading is installed once the last window is gone, so no
   // file in the program directory is still locked by a running process.
+  extensionPopupWindow ? closeExtensionPopup() : undefined;
   updateManager?.installOnQuit();
   persistDownloadsNow();
 });

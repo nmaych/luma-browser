@@ -164,6 +164,7 @@ export function App() {
   const isDesktop = Boolean(desktop?.isDesktop);
   const isIncognito = Boolean(desktop?.isIncognito);
   const [tabOverviewOpen, setTabOverviewOpen] = useState(false);
+  const [extensions, setExtensions] = useState<LumaExtension[]>([]);
   const [tabPreviews, setTabPreviews] = useState<Record<string, { url: string; data: string }>>({});
   const [nativeNavigation, setNativeNavigation] = useState<Record<string, NativeNavigationState>>({});
   const [pageContext, setPageContext] = useState<PageContextState | null>(null);
@@ -236,6 +237,22 @@ export function App() {
     document.documentElement.dataset.incognito = String(isIncognito);
   }, [browser.activeEntry.title, browser.preferences.reduceMotion, isIncognito]);
 
+  // Extension toolbar icons come from the main process: the UI cannot read
+  // chrome-extension:// assets itself, so icons arrive as data URLs.
+  useEffect(() => {
+    if (!desktop?.listExtensions) return undefined;
+    let active = true;
+    const apply = (list: LumaExtension[]) => {
+      if (active) setExtensions(list);
+    };
+    void desktop.listExtensions().then(apply).catch(() => undefined);
+    const unsubscribe = desktop.onExtensionsChanged?.(apply);
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [desktop]);
+
   // Popovers are mirrored above the page only while a native page covers the UI.
   useEffect(() => {
     setNativePageVisible(showDesktopWeb);
@@ -289,6 +306,17 @@ export function App() {
       unsubscribe();
     };
   }, [browser.showToast, desktop]);
+
+  const extensionActions = useMemo(
+    () => extensions
+      .filter((extension) => extension.enabled && extension.toolbar)
+      .map((extension) => ({
+        id: extension.id,
+        name: extension.toolbar?.title || extension.name,
+        icon: extension.toolbar?.icon ?? null,
+      })),
+    [extensions],
+  );
 
   const activeOrigin = useMemo(() => {
     try {
@@ -1978,6 +2006,10 @@ export function App() {
           rightClickCloses={browser.preferences.rightClickClosesTab}
           scrollSwitches={browser.preferences.scrollTabsToSwitch}
           isIncognito={isIncognito}
+          extensionActions={extensionActions}
+          onOpenExtension={(id: string, anchor: { x: number; y: number; width: number; height: number }) => {
+            void desktop?.openExtensionPopup?.(id, anchor);
+          }}
           onOpenSettings={() => browser.openInternalPage('settings')}
           isDesktop={isDesktop}
           isMaximized={isMaximized}

@@ -1268,9 +1268,9 @@ export function SettingsPage({
                       </div>
                     )}
                     <p className="update-hint">
-                      Electron 目前没有工具栏按钮：带弹窗的扩展（密码管理器等）暂时无法点开菜单，
-                      内容脚本、后台脚本与存储仍然正常工作。依赖 declarativeNetRequest 的拦截类扩展不受支持，
-                      广告拦截请使用内置引擎。无痕窗口不会加载扩展。
+                      带 <code>action</code> 的扩展会在标签栏右侧显示图标，点击即可打开它的弹窗（Esc 或点击别处关闭）。
+                      扩展无法更新图标上的角标数字，依赖 declarativeNetRequest 的拦截类扩展也不受支持，
+                      广告拦截请使用内置引擎；无痕窗口不会加载扩展。
                     </p>
                   </div>
                 )}

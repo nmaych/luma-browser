@@ -103,6 +103,12 @@ interface LumaMemoryPressure {
   ratio: number;
 }
 
+interface LumaExtensionToolbar {
+  title: string;
+  icon: string | null;
+  popup: string | null;
+}
+
 interface LumaExtension {
   id: string;
   name: string;
@@ -117,6 +123,7 @@ interface LumaExtension {
   enabled: boolean;
   loaded: boolean;
   error: string | null;
+  toolbar: LumaExtensionToolbar | null;
 }
 
 interface LumaExtensionResult {
@@ -258,6 +265,12 @@ interface LumaDesktopApi {
   reloadExtension: (id: string) => Promise<LumaExtensionResult>;
   removeExtension: (id: string) => Promise<LumaExtensionResult>;
   openExtensionsFolder: () => Promise<boolean>;
+  openExtensionPopup: (
+    id: string,
+    anchor: { x: number; y: number; width: number; height: number },
+  ) => Promise<{ ok: boolean; error?: string; closed?: boolean; opened?: boolean }>;
+  closeExtensionPopup: () => Promise<boolean>;
+  onExtensionsChanged: (callback: (list: LumaExtension[]) => void) => () => void;
   onUpdateState: (callback: (state: LumaUpdateState) => void) => () => void;
   onMemoryPressure: (callback: (info: LumaMemoryPressure) => void) => () => void;
   openIncognito: () => void;

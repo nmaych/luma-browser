@@ -43,6 +43,13 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   reloadExtension: (id) => ipcRenderer.invoke('extensions:reload', id),
   removeExtension: (id) => ipcRenderer.invoke('extensions:remove', id),
   openExtensionsFolder: () => ipcRenderer.invoke('extensions:open-folder'),
+  openExtensionPopup: (id, anchor) => ipcRenderer.invoke('extensions:popup', id, anchor),
+  closeExtensionPopup: () => ipcRenderer.invoke('extensions:close-popup'),
+  onExtensionsChanged: (callback) => {
+    const listener = (_event, list) => callback(list);
+    ipcRenderer.on('extensions:changed', listener);
+    return () => ipcRenderer.removeListener('extensions:changed', listener);
+  },
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('updates:state', listener);

@@ -65,6 +65,62 @@ function validateManifest(manifest) {
   return { ok: true };
 }
 
+const ICON_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+};
+
+/** Picks the largest declared icon up to 64 px; Chrome prefers 32 for toolbars. */
+function pickIconEntry(icon) {
+  if (typeof icon === 'string') return icon;
+  if (!icon || typeof icon !== 'object') return null;
+  const entries = Object.entries(icon)
+    .map(([size, file]) => ({ size: Number(size), file }))
+    .filter((entry) => Number.isFinite(entry.size) && typeof entry.file === 'string')
+    .sort((left, right) => left.size - right.size);
+  if (entries.length === 0) return null;
+  const preferred = entries.find((entry) => entry.size >= 32) ?? entries[entries.length - 1];
+  return preferred.file;
+}
+
+/**
+ * The browser UI cannot request `chrome-extension://` assets, so the icon is
+ * read from disk and handed to the renderer as a data URL.
+ */
+function readActionIcon(directory, icon) {
+  const relative = pickIconEntry(icon);
+  if (!relative) return null;
+  const target = path.resolve(directory, relative);
+  // A manifest must not be able to point outside its own directory.
+  if (!target.startsWith(path.resolve(directory) + path.sep)) return null;
+  try {
+    const bytes = fs.readFileSync(target);
+    if (bytes.length > 256 * 1024) return null;
+    const mime = ICON_MIME[path.extname(target).toLowerCase()] ?? 'image/png';
+    return `data:${mime};base64,${bytes.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Toolbar metadata: popup path, title and icon data URL. */
+function describeAction(manifest, directory) {
+  const action = manifest.action ?? manifest.browser_action ?? manifest.page_action;
+  if (!action || typeof action !== 'object') return null;
+  const popup = typeof action.default_popup === 'string' ? action.default_popup.trim() : '';
+  const title = cleanText(action.default_title, 120) || cleanText(manifest.name, 120);
+  return {
+    title,
+    popup: popup && !popup.includes('..') ? popup.replace(/^\/+/, '') : '',
+    icon: readActionIcon(directory, action.default_icon) ?? null,
+  };
+}
+
 /** Flattens a manifest into the fields the settings list renders. */
 function summarizeManifest(manifest, directory = '') {
   const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];
@@ -153,7 +209,7 @@ function copyExtension(from, to) {
   });
 }
 
-function createExtensionManager({ directory, session, log = () => {} }) {
+function createExtensionManager({ directory, session, log = () => {}, onChange = () => {} }) {
   /** @type {Map<string, any>} */
   const entries = new Map();
   /** @type {{ schema: number, enabled: Record<string, boolean> }} */
@@ -225,6 +281,7 @@ function createExtensionManager({ directory, session, log = () => {} }) {
       entries.set(name, {
         id: name,
         directory: extensionDir,
+        action: describeAction(parsed.manifest, extensionDir),
         summary: summarizeManifest(parsed.manifest, extensionDir),
         enabled,
         loaded: null,
@@ -270,6 +327,13 @@ function createExtensionManager({ directory, session, log = () => {} }) {
       hostPermissions: entry.summary?.hostPermissions ?? [],
       matches: entry.summary?.matches ?? [],
       hasAction: entry.summary?.hasAction ?? false,
+      toolbar: entry.action && entry.loaded
+        ? {
+          title: entry.action.title,
+          icon: entry.action.icon,
+          popup: entry.action.popup ? `chrome-extension://${entry.loaded.id}/${entry.action.popup}` : null,
+        }
+        : null,
       hasBackground: entry.summary?.hasBackground ?? false,
       enabled: entry.enabled,
       loaded: Boolean(entry.loaded),
@@ -284,8 +348,17 @@ function createExtensionManager({ directory, session, log = () => {} }) {
   async function loadAll() {
     state = readState();
     scan();
+    notify();
     for (const entry of entries.values()) {
       if (entry.enabled && entry.summary && !entry.error) await loadEntry(entry);
+    }
+  }
+
+  function notify() {
+    try {
+      onChange(list());
+    } catch {
+      // A closed window must not break extension management.
     }
   }
 
@@ -333,6 +406,7 @@ function createExtensionManager({ directory, session, log = () => {} }) {
     scan();
     const entry = entries.get(id);
     if (entry) await loadEntry(entry);
+    notify();
     return { ok: true, extension: entry ? toPublic(entry) : null, list: list() };
   }
 
@@ -344,6 +418,7 @@ function createExtensionManager({ directory, session, log = () => {} }) {
     entry.enabled = Boolean(enabled);
     if (enabled) await loadEntry(entry);
     else unloadEntry(entry);
+    notify();
     return { ok: true, list: list() };
   }
 
@@ -352,6 +427,7 @@ function createExtensionManager({ directory, session, log = () => {} }) {
     if (!entry) return { ok: false, error: '扩展不存在', list: list() };
     unloadEntry(entry);
     await loadEntry(entry);
+    notify();
     return { ok: true, list: list() };
   }
 
@@ -367,6 +443,7 @@ function createExtensionManager({ directory, session, log = () => {} }) {
     delete state.enabled[id];
     writeState();
     entries.delete(id);
+    notify();
     return { ok: true, list: list() };
   }
 
@@ -385,6 +462,7 @@ function createExtensionManager({ directory, session, log = () => {} }) {
 
 module.exports = {
   createExtensionManager,
+  describeAction,
   summarizeManifest,
   validateManifest,
   readManifest,

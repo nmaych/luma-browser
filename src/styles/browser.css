@@ -380,3 +380,12 @@ body.is-resizing-devtools .web-content { pointer-events: none; }
 .find-bar__count { min-width: 42px; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; text-align: center; }
 .find-bar > button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border-radius: 7px; color: var(--text-soft); background: transparent; }
 .find-bar > button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+
+/* 扩展工具栏：图标按钮与占位首字母 */
+.extension-actions { display: flex; align-items: center; flex: 0 0 auto; max-width: 190px; padding: 0 4px; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.extension-actions::-webkit-scrollbar { display: none; }
+.extension-action { display: grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
+.extension-action:hover { background: var(--hover); }
+.extension-action:active { border-color: var(--border); }
+.extension-action img { width: 16px; height: 16px; object-fit: contain; }
+.extension-action__fallback { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: 9px; font-weight: 700; }

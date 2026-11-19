@@ -113,9 +113,15 @@ Electron 暴露的是 Chrome 扩展平台的一个子集，Luma 只做"已解压
 ```
 
 实测可用的能力：内容脚本注入（原生 `WebContentsView` 页面同样生效）、后台 Service Worker、
-`chrome.runtime` 双向消息、`chrome.storage.local`。不可用的能力：工具栏按钮与 `chrome.action` 弹窗、
-`declarativeNetRequest`、Web Store 一键安装、`chrome.identity` / `sidePanel` / `commands`。
-因此扩展管理器在界面上直接标注这些边界，避免用户装了密码管理器却找不到入口。
+`chrome.runtime` 双向消息、`chrome.storage.local`、工具栏图标与 `chrome.action` 弹窗。
+
+工具栏与弹窗的做法：主进程读出 `action.default_icon`（转 data URL，UI 读不到 `chrome-extension://`
+资源）交给渲染层；点击图标时渲染层上报图标的屏幕矩形，主进程在其下方创建一个无边框子窗口，
+加载 `chrome-extension://<id>/<default_popup>`。弹窗必须运行在扩展源上，`chrome.*` 才可用，
+所以不能用 React 浮层渲染。失焦、Esc、再次点击图标都会关闭。
+
+不可用的能力：图标角标（badge）、右键菜单、`chrome.action.onClicked`、`declarativeNetRequest`、
+Web Store 一键安装、`chrome.identity` / `sidePanel` / `commands`。
 
 ## 三、界面
 

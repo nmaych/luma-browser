@@ -11,9 +11,12 @@
 - **扩展（已解压）**：设置 → 扩展可以加载含 `manifest.json` 的扩展目录。Luma 把扩展复制到
   `%LOCALAPPDATA%\Luma Browser\Extensions`，每次启动重新加载，并支持启用/禁用、重新加载与移除。
   每个扩展显示名称、版本、manifest 版本、匹配规则与错误原因。
+- **扩展工具栏与弹窗**：带 `action` 的扩展会在标签栏右侧显示图标，点击在图标下方打开它的
+  `default_popup`（独立无边框子窗口，`chrome-extension://` 原生上下文），再次点击、失焦或按 Esc 关闭；
+  弹窗按内容自动调整尺寸，并限制在屏幕工作区内。
 - 实测可用：内容脚本注入（含原生 `WebContentsView` 页面）、后台 Service Worker、
-  `chrome.runtime.sendMessage` 双向通信、`chrome.storage.local` 双端读写。
-- 已知边界：Electron 不提供工具栏按钮与 `chrome.action` 弹窗，密码管理器这类扩展暂时点不开；
+  `chrome.runtime.sendMessage` 双向通信、`chrome.storage.local` 双端读写、工具栏图标与弹窗。
+- 已知边界：扩展无法更新图标角标（badge），也没有右键菜单与 `chrome.action.onClicked`；
   `declarativeNetRequest` 不受支持，拦截类扩展无法工作，广告拦截仍由内置引擎负责；无痕窗口不加载扩展。
 
 安全：

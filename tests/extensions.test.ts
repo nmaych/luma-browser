@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { createExtensionManager, validateManifest } = require('../electron/extensions.cjs');
+const { createExtensionManager, describeAction, validateManifest } = require('../electron/extensions.cjs');
 
 const dirs: string[] = [];
 const tempDir = (prefix: string) => {
@@ -152,5 +152,47 @@ describe('extension manager', () => {
     const revived = createExtensionManager({ directory: root, session: createSession() });
     await revived.loadAll();
     expect(revived.list()).toHaveLength(0);
+  });
+});
+
+describe('toolbar action metadata', () => {
+  it('turns a declared icon into a data URL and keeps the popup path', () => {
+    const directory = tempDir('luma-ext-icon-');
+    mkdirSync(path.join(directory, 'icons'));
+    // 1x1 transparent PNG
+    writeFileSync(path.join(directory, 'icons', 'icon.png'), Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    ));
+    writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+      ...MV3,
+      action: { default_title: 'Probe', default_popup: 'popup.html', default_icon: { 16: 'icons/icon.png', 32: 'icons/icon.png' } },
+    }));
+
+    const action = describeAction(require(path.join(directory, 'manifest.json')), directory);
+    expect(action).toMatchObject({ title: 'Probe', popup: 'popup.html' });
+    expect(action.icon).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('refuses an icon that escapes the extension directory', () => {
+    const directory = tempDir('luma-ext-icon-');
+    writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+      ...MV3,
+      action: { default_icon: '../../secret.png' },
+    }));
+    const action = describeAction(require(path.join(directory, 'manifest.json')), directory);
+    expect(action.icon).toBeNull();
+  });
+
+  it('falls back to the extension name when no title is set', () => {
+    const directory = tempDir('luma-ext-icon-');
+    writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+      ...MV3,
+      action: { default_popup: '/popup.html' },
+    }));
+    const action = describeAction(require(path.join(directory, 'manifest.json')), directory);
+    expect(action.title).toBe('Probe Extension');
+    // Leading slashes are normalized so the chrome-extension:// URL stays valid.
+    expect(action.popup).toBe('popup.html');
   });
 });

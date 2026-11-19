@@ -1827,3 +1827,41 @@ test('installs an unpacked extension and runs its content script', async () => {
   expect(removed.list.some((item: { name: string }) => item.name === 'E2E Probe')).toBe(false);
   rmSync(extensionDir, { recursive: true, force: true });
 });
+
+test('opens an extension popup from the toolbar and closes it again', async () => {
+  const extensionDir = mkdtempSync(path.join(os.tmpdir(), 'luma-e2e-popup-'));
+  writeFileSync(path.join(extensionDir, 'manifest.json'), JSON.stringify({
+    manifest_version: 3,
+    name: 'Popup Probe',
+    version: '1.0.0',
+    action: { default_title: 'Popup Probe', default_popup: 'popup.html' },
+  }, null, 2));
+  writeFileSync(path.join(extensionDir, 'popup.html'),
+    '<!doctype html><html><body style="margin:0;padding:14px;font:14px sans-serif;background:#fff">'
+    + '<div id="probe">popup-body</div></body></html>');
+
+  const installed = await page.evaluate((dir) => window.lumaDesktop.installExtension(dir), extensionDir);
+  expect(installed.ok).toBe(true);
+
+  const toolbarIcon = page.getByRole('button', { name: '扩展 Popup Probe' });
+  await expect(toolbarIcon).toBeVisible({ timeout: 10_000 });
+
+  const popupPromise = app.waitForEvent('window', { timeout: 15_000 });
+  await toolbarIcon.click();
+  const popup = await popupPromise;
+  await popup.waitForLoadState('domcontentloaded');
+  expect(popup.url()).toContain('chrome-extension://');
+  expect(popup.url()).toContain('popup.html');
+  await expect(popup.locator('#probe')).toHaveText('popup-body');
+
+  // The host follows Chrome: clicking the icon again toggles the popup shut.
+  await toolbarIcon.click();
+  await expect.poll(
+    () => app.windows().filter((window) => window.url().startsWith('chrome-extension://')).length,
+    { timeout: 5_000 },
+  ).toBe(0);
+
+  const removed = await page.evaluate((id) => window.lumaDesktop.removeExtension(id), installed.list[0].id);
+  expect(removed.ok).toBe(true);
+  rmSync(extensionDir, { recursive: true, force: true });
+});
