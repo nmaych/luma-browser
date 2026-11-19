@@ -22,6 +22,7 @@ const VENDOR_DIR = 'Luma Browser';
 const USER_DATA_DIR = 'User Data';
 const UPDATE_DIR = 'Update';
 const PACKAGES_DIR = 'packages';
+const EXTENSIONS_DIR = 'Extensions';
 const UPDATE_LOG = 'update.log';
 const LAYOUT_MARKER = 'layout.json';
 const LAYOUT_SCHEMA = 2;
@@ -60,6 +61,7 @@ function resolveAppPaths({ localAppData = localAppDataDir() } = {}) {
     update,
     packages: path.join(update, PACKAGES_DIR),
     log: path.join(update, UPDATE_LOG),
+    extensions: path.join(appRoot, EXTENSIONS_DIR),
     marker: path.join(appRoot, USER_DATA_DIR, LAYOUT_MARKER),
   };
 }
@@ -151,7 +153,7 @@ function migrateLegacyProfile(target, log = () => {}) {
 }
 
 function ensureUpdateDirs(paths) {
-  for (const directory of [paths.update, paths.packages]) {
+  for (const directory of [paths.update, paths.packages, paths.extensions]) {
     try {
       fs.mkdirSync(directory, { recursive: true });
     } catch {
@@ -206,4 +208,5 @@ module.exports = {
   UPDATE_LOG,
   USER_DATA_DIR,
   VENDOR_DIR,
+  EXTENSIONS_DIR,
 };

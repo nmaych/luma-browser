@@ -11,6 +11,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FolderOpen,
   Globe2,
   HardDrive,
   Home,
@@ -26,6 +27,7 @@ import {
   Palette,
   PanelsTopLeft,
   Plus,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Search,
@@ -57,7 +59,7 @@ import { Logo } from '../components/common/Logo';
 import { SearchEngineMark } from '../components/common/SearchEngineMark';
 import { Modal } from '../components/common/Modal';
 
-type SettingsSection = 'general' | 'tabs' | 'search' | 'shortcuts' | 'adblock' | 'passwords' | 'permissions' | 'privacy' | 'about';
+type SettingsSection = 'general' | 'tabs' | 'search' | 'shortcuts' | 'adblock' | 'extensions' | 'passwords' | 'permissions' | 'privacy' | 'about';
 
 interface SettingsPageProps {
   preferences: Preferences;
@@ -107,6 +109,7 @@ const sections: { id: SettingsSection; label: string; icon: typeof SlidersHorizo
   { id: 'search', label: '搜索引擎', icon: Search },
   { id: 'shortcuts', label: '快捷键', icon: Keyboard },
   { id: 'adblock', label: '广告与跟踪拦截', icon: ShieldCheck },
+  { id: 'extensions', label: '扩展', icon: Puzzle },
   { id: 'passwords', label: '密码与自动填充', icon: KeyRound },
   { id: 'permissions', label: '权限管理', icon: LockKeyhole },
   { id: 'privacy', label: '隐私与安全', icon: ShieldCheck },
@@ -115,7 +118,7 @@ const sections: { id: SettingsSection; label: string; icon: typeof SlidersHorizo
 
 const SECTION_GROUPS: { label: string; ids: SettingsSection[] }[] = [
   { label: '基础', ids: ['general', 'tabs', 'search'] },
-  { label: '浏览工具', ids: ['shortcuts', 'adblock', 'passwords'] },
+  { label: '浏览工具', ids: ['shortcuts', 'adblock', 'extensions', 'passwords'] },
   { label: '安全与数据', ids: ['permissions', 'privacy', 'about'] },
 ];
 
@@ -125,6 +128,7 @@ const sectionMeta: Record<SettingsSection, { title: string; description: string 
   search: { title: '搜索引擎', description: '管理默认搜索引擎，或添加自己的搜索服务。' },
   shortcuts: { title: '键盘快捷键', description: '为常用操作录制自己的按键组合，并设置一键隐藏窗口的老板键。' },
   adblock: { title: '广告与跟踪拦截', description: '内置离线拦截规则，可按网站单独暂停或恢复。' },
+  extensions: { title: '扩展', description: '加载已解压的 Chrome 扩展（MV2 / MV3），或管理已安装的扩展。' },
   passwords: { title: '密码与自动填充', description: '登录信息使用系统安全存储加密保存在本机。' },
   permissions: { title: '权限管理', description: '决定网站可以访问哪些设备、位置和系统能力。' },
   privacy: { title: '隐私与安全', description: '了解数据和网站权限如何被保护。' },
@@ -254,6 +258,9 @@ export function SettingsPage({
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateLine, setUpdateLine] = useState('github');
   const [appPaths, setAppPaths] = useState<LumaAppPaths | null>(null);
+  const [extensions, setExtensions] = useState<LumaExtension[]>([]);
+  const [extensionBusy, setExtensionBusy] = useState<string | null>(null);
+  const [extensionError, setExtensionError] = useState('');
   const engines = getAllSearchEngines(preferences.customSearchEngines);
   const currentEngine = engines.find((engine) => engine.id === preferences.searchEngine) ?? engines[0];
   const builtInHome = preferences.homePage === INTERNAL_ROUTES.home;
@@ -399,6 +406,75 @@ export function SettingsPage({
       active = false;
     };
   }, [desktop]);
+
+  const refreshExtensions = async () => {
+    if (!desktop?.listExtensions) return;
+    try {
+      setExtensions(await desktop.listExtensions());
+    } catch {
+      // The list is re-fetched whenever the section is opened.
+    }
+  };
+
+  useEffect(() => {
+    if (activeSection !== 'extensions') return;
+    void refreshExtensions();
+  }, [activeSection]);
+
+  const installExtension = async () => {
+    if (!desktop?.installExtension) return;
+    setExtensionBusy('install');
+    setExtensionError('');
+    try {
+      const result = await desktop.installExtension();
+      if (result?.list) setExtensions(result.list);
+      if (!result?.ok && !result?.cancelled) setExtensionError(result?.error ?? '加载扩展失败');
+    } catch (error) {
+      setExtensionError(error instanceof Error ? error.message : '加载扩展失败');
+    } finally {
+      setExtensionBusy(null);
+    }
+  };
+
+  const toggleExtension = async (extension: LumaExtension, enabled: boolean) => {
+    if (!desktop?.setExtensionEnabled) return;
+    setExtensionError('');
+    // Optimistic: the switch should react immediately even though loading is async.
+    setExtensions((current) => current.map((item) => (item.id === extension.id ? { ...item, enabled } : item)));
+    try {
+      const result = await desktop.setExtensionEnabled(extension.id, enabled);
+      if (result?.list) setExtensions(result.list);
+      if (!result?.ok) setExtensionError(result?.error ?? '切换扩展状态失败');
+    } catch {
+      setExtensionError('切换扩展状态失败');
+    }
+  };
+
+  const reloadExtension = async (extension: LumaExtension) => {
+    if (!desktop?.reloadExtension) return;
+    setExtensionBusy(extension.id);
+    setExtensionError('');
+    try {
+      const result = await desktop.reloadExtension(extension.id);
+      if (result?.list) setExtensions(result.list);
+      if (!result?.ok) setExtensionError(result?.error ?? '重新加载失败');
+    } finally {
+      setExtensionBusy(null);
+    }
+  };
+
+  const removeExtension = async (extension: LumaExtension) => {
+    if (!desktop?.removeExtension) return;
+    setExtensionBusy(extension.id);
+    setExtensionError('');
+    try {
+      const result = await desktop.removeExtension(extension.id);
+      if (result?.list) setExtensions(result.list);
+      if (!result?.ok) setExtensionError(result?.error ?? '移除扩展失败');
+    } finally {
+      setExtensionBusy(null);
+    }
+  };
 
   useEffect(() => {
     if (!desktop?.getUpdateState) return undefined;
@@ -728,7 +804,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.15.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.16.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -1102,6 +1178,105 @@ export function SettingsPage({
               </div>
             )}
 
+            {activeSection === 'extensions' && (
+              <div className="settings-content">
+                <PanelHeading
+                  icon={<Puzzle size={18} />}
+                  title="扩展"
+                  description="加载已解压的 Chrome 扩展（MV2 / MV3），或管理已安装的扩展。"
+                />
+                {!desktop ? (
+                  <div className="settings-card"><p className="permission-empty">扩展仅在 Luma 桌面应用中可用。</p></div>
+                ) : (
+                  <div className="settings-card">
+                    <div className="settings-card__header">
+                      <div>
+                        <h3>已安装扩展</h3>
+                        <p>扩展运行在浏览配置中，能够读取和修改你访问的网页，请只加载可信来源的扩展。</p>
+                      </div>
+                      <div className="update-actions">
+                        <button className="secondary-button" type="button" onClick={() => void desktop?.openExtensionsFolder?.()}>
+                          <FolderOpen size={15} /> 打开目录
+                        </button>
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={extensionBusy === 'install'}
+                          onClick={() => void installExtension()}
+                        >
+                          <Plus size={16} /> {extensionBusy === 'install' ? '正在加载…' : '加载已解压扩展'}
+                        </button>
+                      </div>
+                    </div>
+                    {extensionError && <p className="form-error" role="alert">{extensionError}</p>}
+                    {extensions.length === 0 ? (
+                      <p className="extension-empty">
+                        还没有扩展。选择一个包含 <code>manifest.json</code> 的目录即可加载，Luma 会把它复制到
+                        <code> Luma Browser\Extensions</code> 并在每次启动时自动加载。
+                      </p>
+                    ) : (
+                      <div className="extension-list">
+                        {extensions.map((extension) => (
+                          <div className="extension-row" key={extension.id}>
+                            <div className="extension-row__main">
+                              <strong>
+                                {extension.name}
+                                <small>v{extension.version || '—'}</small>
+                              </strong>
+                              <p>{extension.description || '这个扩展没有提供描述。'}</p>
+                              <div className="extension-row__meta">
+                                <em>MV{extension.manifestVersion}</em>
+                                {extension.hasBackground && <em>后台脚本</em>}
+                                {extension.matches.length > 0 && <em>{extension.matches.length} 条匹配规则</em>}
+                                {!extension.loaded && extension.enabled && <em className="is-warning">未加载</em>}
+                              </div>
+                              {extension.error && <p className="form-error" role="alert">{extension.error}</p>}
+                            </div>
+                            <div className="extension-row__actions">
+                              <label className="switch">
+                                <input
+                                  aria-label={`启用 ${extension.name}`}
+                                  type="checkbox"
+                                  checked={extension.enabled}
+                                  onChange={(event) => void toggleExtension(extension, event.target.checked)}
+                                />
+                                <span />
+                              </label>
+                              <button
+                                className="icon-button icon-button--small"
+                                type="button"
+                                aria-label={`重新加载 ${extension.name}`}
+                                title="重新加载"
+                                disabled={extensionBusy === extension.id}
+                                onClick={() => void reloadExtension(extension)}
+                              >
+                                <RefreshCw size={13} />
+                              </button>
+                              <button
+                                className="icon-button icon-button--small"
+                                type="button"
+                                aria-label={`移除 ${extension.name}`}
+                                title="移除"
+                                disabled={extensionBusy === extension.id}
+                                onClick={() => void removeExtension(extension)}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="update-hint">
+                      Electron 目前没有工具栏按钮：带弹窗的扩展（密码管理器等）暂时无法点开菜单，
+                      内容脚本、后台脚本与存储仍然正常工作。依赖 declarativeNetRequest 的拦截类扩展不受支持，
+                      广告拦截请使用内置引擎。无痕窗口不会加载扩展。
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {activeSection === 'passwords' && (
               <div className="settings-content">
                 {!desktop ? (
@@ -1322,7 +1497,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.15.0'}</span>
+                    <span>版本 {appVersions?.app ?? '1.16.0'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>

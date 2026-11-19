@@ -103,6 +103,29 @@ interface LumaMemoryPressure {
   ratio: number;
 }
 
+interface LumaExtension {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  manifestVersion: number;
+  permissions: string[];
+  hostPermissions: string[];
+  matches: string[];
+  hasAction: boolean;
+  hasBackground: boolean;
+  enabled: boolean;
+  loaded: boolean;
+  error: string | null;
+}
+
+interface LumaExtensionResult {
+  ok: boolean;
+  error?: string;
+  cancelled?: boolean;
+  list: LumaExtension[];
+}
+
 interface LumaAppPaths {  install: string;
   userData: string;
   update: string;
@@ -229,6 +252,12 @@ interface LumaDesktopApi {
   getUpdatePrefs: () => Promise<LumaUpdatePrefs | null>;
   setUpdatePrefs: (patch: Partial<LumaUpdatePrefs>) => Promise<LumaUpdateState | null>;
   getAppPaths: () => Promise<LumaAppPaths | null>;
+  listExtensions: () => Promise<LumaExtension[]>;
+  installExtension: (sourcePath?: string) => Promise<LumaExtensionResult>;
+  setExtensionEnabled: (id: string, enabled: boolean) => Promise<LumaExtensionResult>;
+  reloadExtension: (id: string) => Promise<LumaExtensionResult>;
+  removeExtension: (id: string) => Promise<LumaExtensionResult>;
+  openExtensionsFolder: () => Promise<boolean>;
   onUpdateState: (callback: (state: LumaUpdateState) => void) => () => void;
   onMemoryPressure: (callback: (info: LumaMemoryPressure) => void) => () => void;
   openIncognito: () => void;

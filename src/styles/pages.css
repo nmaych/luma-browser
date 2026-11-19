@@ -627,3 +627,17 @@
 .adblock-meta__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .adblock-meta__actions em { padding: 3px 7px; border-radius: 20px; color: var(--text-soft); background: var(--surface-soft); font-size: 8px; font-style: normal; }
 .adblock-meta__actions .secondary-button { min-height: 30px; padding: 0 10px; gap: 5px; font-size: 10px; }
+
+/* 扩展管理：列表行与空状态 */
+.extension-list { display: grid; gap: 9px; margin-top: 12px; }
+.extension-row { display: flex; align-items: flex-start; justify-content: space-between; min-width: 0; padding: 12px 13px; gap: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.extension-row__main { display: grid; min-width: 0; gap: 4px; }
+.extension-row__main strong { display: flex; align-items: baseline; gap: 6px; color: var(--text); font-size: 12px; }
+.extension-row__main strong small { color: var(--text-muted); font-size: 10px; font-weight: 500; }
+.extension-row__main p { color: var(--text-soft); font-size: 11px; line-height: 1.6; }
+.extension-row__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.extension-row__meta em { padding: 2px 7px; border: 1px solid var(--border); border-radius: 20px; color: var(--text-muted); background: var(--surface); font-size: 9px; font-style: normal; }
+.extension-row__meta em.is-warning { border-color: var(--accent-soft); color: var(--text); background: var(--accent-faint); }
+.extension-row__actions { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; }
+.extension-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; color: var(--text-muted); font-size: 11px; line-height: 1.8; }
+.extension-empty code { padding: 1px 4px; border-radius: 4px; background: var(--surface-soft); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }

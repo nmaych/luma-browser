@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   getUpdatePrefs: () => ipcRenderer.invoke('updates:prefs'),
   setUpdatePrefs: (patch) => ipcRenderer.invoke('updates:set-prefs', patch),
   getAppPaths: () => ipcRenderer.invoke('app:paths'),
+  listExtensions: () => ipcRenderer.invoke('extensions:list'),
+  installExtension: (sourcePath) => ipcRenderer.invoke('extensions:install', sourcePath),
+  setExtensionEnabled: (id, enabled) => ipcRenderer.invoke('extensions:set-enabled', id, enabled),
+  reloadExtension: (id) => ipcRenderer.invoke('extensions:reload', id),
+  removeExtension: (id) => ipcRenderer.invoke('extensions:remove', id),
+  openExtensionsFolder: () => ipcRenderer.invoke('extensions:open-folder'),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('updates:state', listener);

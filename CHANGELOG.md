@@ -4,6 +4,23 @@
 存储或 IPC 不兼容变更提升 MAJOR。每个版本只发布一次，并同步更新 `package.json`、
 设置页版本兜底值与 `release/<version>/` 目录。
 
+## 1.16.0
+
+新增：
+
+- **扩展（已解压）**：设置 → 扩展可以加载含 `manifest.json` 的扩展目录。Luma 把扩展复制到
+  `%LOCALAPPDATA%\Luma Browser\Extensions`，每次启动重新加载，并支持启用/禁用、重新加载与移除。
+  每个扩展显示名称、版本、manifest 版本、匹配规则与错误原因。
+- 实测可用：内容脚本注入（含原生 `WebContentsView` 页面）、后台 Service Worker、
+  `chrome.runtime.sendMessage` 双向通信、`chrome.storage.local` 双端读写。
+- 已知边界：Electron 不提供工具栏按钮与 `chrome.action` 弹窗，密码管理器这类扩展暂时点不开；
+  `declarativeNetRequest` 不受支持，拦截类扩展无法工作，广告拦截仍由内置引擎负责；无痕窗口不加载扩展。
+
+安全：
+
+- 扩展只能从用户显式选择的目录安装，且必须通过 manifest 校验（MV2/MV3、名称、版本、至少一项能力）；
+  复制时跳过符号链接与 VCS 目录，体积上限 100 MB；先复制到临时目录再改名，避免留下半装状态。
+
 ## 1.15.0
 
 框架、机制与界面三方面的调整，模块地图与机制说明见 [docs/architecture.md](docs/architecture.md)。

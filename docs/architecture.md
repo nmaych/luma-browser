@@ -20,6 +20,7 @@
 │ electron/passwords.cjs       safeStorage 密码库                        │
 │ electron/overlaySurface.cjs  浮层镜像（菜单盖在原生页之上）              │
 │ electron/updater.cjs         检查 → 后台下载 → 延迟安装                 │
+│ electron/extensions.cjs      已解压扩展的校验、安装与加载                │
 │ electron/appPaths.cjs        User Data / Update 目录与旧数据迁移        │
 │ electron/versioning.cjs      版本比较与产物命名                         │
 └───────────────────────────────────────────────────────────────────────┘
@@ -99,6 +100,22 @@ Chromium 的 HTTP 缓存默认不设上限，Electron 应用久而久之会把 p
 
 详见 [browser-layout-and-updates.md](browser-layout-and-updates.md)。要点：4 小时轮询、后台预下载、
 关闭最后窗口时静默安装、`update.log` 与 `packages/previous` 回滚包。
+
+### 6. 扩展：受限但可用
+
+Electron 暴露的是 Chrome 扩展平台的一个子集，Luma 只做"已解压扩展"这一种形态：
+
+```text
+用户选择目录 → manifest 校验（MV2/MV3、name/version、至少一项能力）
+             → 复制到 …\Luma Browser\Extensions\<id>（临时目录 + 改名）
+             → session.loadExtension(dir, { allowFileAccess: true })
+             → 每次启动重新加载（Electron 要求每次 boot 都调用）
+```
+
+实测可用的能力：内容脚本注入（原生 `WebContentsView` 页面同样生效）、后台 Service Worker、
+`chrome.runtime` 双向消息、`chrome.storage.local`。不可用的能力：工具栏按钮与 `chrome.action` 弹窗、
+`declarativeNetRequest`、Web Store 一键安装、`chrome.identity` / `sidePanel` / `commands`。
+因此扩展管理器在界面上直接标注这些边界，避免用户装了密码管理器却找不到入口。
 
 ## 三、界面
 

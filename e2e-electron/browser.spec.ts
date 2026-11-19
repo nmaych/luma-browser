@@ -1776,3 +1776,54 @@ test('cycles tabs from the keyboard and opens one from the empty strip', async (
   });
   await expect(page.locator('.browser-tab')).toHaveCount(countBefore + 2);
 });
+
+test('installs an unpacked extension and runs its content script', async () => {
+  const extensionDir = mkdtempSync(path.join(os.tmpdir(), 'luma-e2e-ext-'));
+  writeFileSync(path.join(extensionDir, 'manifest.json'), JSON.stringify({
+    manifest_version: 3,
+    name: 'E2E Probe',
+    version: '1.0.0',
+    description: 'content script probe',
+    permissions: ['storage'],
+    host_permissions: ['<all_urls>'],
+    content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'], run_at: 'document_end' }],
+  }, null, 2));
+  writeFileSync(path.join(extensionDir, 'content.js'), `
+    const marker = document.createElement('div');
+    marker.id = 'luma-e2e-ext';
+    marker.textContent = 'probe-ok';
+    marker.style.cssText = 'position:fixed;left:-9999px';
+    document.documentElement.appendChild(marker);
+  `);
+
+  const installed = await page.evaluate(
+    (source) => window.lumaDesktop.installExtension(source),
+    extensionDir,
+  );
+  expect(installed.ok).toBe(true);
+  const probeEntry = installed.list.find((item: { name: string }) => item.name === 'E2E Probe');
+  expect(probeEntry).toBeTruthy();
+  expect(probeEntry.enabled).toBe(true);
+  expect(probeEntry.loaded).toBe(true);
+
+  const address = page.getByRole('textbox', { name: '地址和搜索栏' });
+  await address.fill('example.com/?ext=1');
+  await address.press('Enter');
+  await expect.poll(async () => {
+    const info = await pageInfo();
+    return info.url;
+  }, { timeout: 30_000 }).toContain('ext=1');
+
+  const injected = await app.evaluate(async ({ webContents }) => {
+    const target = webContents.getAllWebContents().find((contents) => contents.getURL().includes('ext=1'));
+    if (!target) return null;
+    return target.executeJavaScript("document.getElementById('luma-e2e-ext')?.textContent ?? null");
+  });
+  expect(injected).toBe('probe-ok');
+
+  // Removing the extension unloads it and deletes the managed copy.
+  const removed = await page.evaluate((id) => window.lumaDesktop.removeExtension(id), probeEntry.id);
+  expect(removed.ok).toBe(true);
+  expect(removed.list.some((item: { name: string }) => item.name === 'E2E Probe')).toBe(false);
+  rmSync(extensionDir, { recursive: true, force: true });
+});

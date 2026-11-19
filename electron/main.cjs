@@ -9,6 +9,7 @@ const { createUpdater } = require('./updater.cjs');
 const { configureUserData } = require('./appPaths.cjs');
 const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
 const { configureSession } = require('./main/sessionPolicy.cjs');
+const { createExtensionManager } = require('./extensions.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
 const { translateTexts } = require('./main/translate.cjs');
 const {
@@ -282,6 +283,10 @@ let startupUpdateTimer = null;
 let updateCheckTimer = null;
 let memoryPressureTimer = null;
 let lastMemoryPressureAt = 0;
+/** @type {ReturnType<typeof createExtensionManager> | null} */
+let extensionManager = null;
+/** Extensions follow the profile: an isolated --user-data-dir gets its own set. */
+let extensionsDirectory = null;
 
 function isFileUrl(url) {
   try {
@@ -1437,6 +1442,20 @@ app.whenReady().then(() => {
       onDownload: (target) => attachDownloadHandling(target, target === incognitoSession),
     });
   }
+  // Unpacked extensions live under User Data-adjacent `Extensions`; Electron
+  // requires loadExtension on every boot, so the manager re-loads them here and
+  // reports failures in the settings list instead of failing silently.
+  extensionsDirectory = appPaths.overridden
+    ? path.join(app.getPath('userData'), 'Extensions')
+    : appPaths.extensions;
+  extensionManager = createExtensionManager({
+    directory: extensionsDirectory,
+    session: browserSession,
+    log: (line) => console.log(line),
+  });
+  void extensionManager.loadAll().catch((error) => {
+    console.error('[extensions] load failed:', error);
+  });
   loadPersistedDownloads();
   // Loading the cached engine is cheap; a stale/missing cache refreshes in the
   // background so the first window opens immediately.
@@ -2282,6 +2301,44 @@ ipcMain.handle('updates:prefs', () => updateManager?.getState().prefs ?? { autoD
 ipcMain.handle('updates:set-prefs', (_event, patch) => updateManager?.setPrefs(patch) ?? null);
 // Chrome exposes chrome://version; the settings page shows the same three roots
 // so a user can find the profile, the update cache and the program directory.
+ipcMain.handle('extensions:list', () => extensionManager?.list() ?? []);
+ipcMain.handle('extensions:install', async (event, sourcePath) => {
+  if (!extensionManager) return { ok: false, error: '扩展管理器尚未就绪', list: [] };
+  let source = typeof sourcePath === 'string' && sourcePath ? sourcePath : '';
+  if (!source) {
+    // Picking the folder is the user's explicit consent to run third-party code.
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择已解压的扩展目录（含 manifest.json）',
+      properties: ['openDirectory'],
+      buttonLabel: '加载扩展',
+    });
+    if (result.canceled || result.filePaths.length === 0) return { ok: false, cancelled: true, list: extensionManager.list() };
+    source = result.filePaths[0];
+  }
+  const outcome = await extensionManager.install(source);
+  return { ...outcome, list: extensionManager.list() };
+});
+ipcMain.handle('extensions:set-enabled', (_event, id, enabled) => (
+  extensionManager ? extensionManager.setEnabled(id, enabled) : { ok: false, list: [] }
+));
+ipcMain.handle('extensions:reload', (_event, id) => (
+  extensionManager ? extensionManager.reload(id) : { ok: false, list: [] }
+));
+ipcMain.handle('extensions:remove', (_event, id) => (
+  extensionManager ? extensionManager.remove(id) : { ok: false, list: [] }
+));
+ipcMain.handle('extensions:open-folder', async () => {
+  const target = extensionsDirectory ?? appPaths.extensions;
+  try {
+    fs.mkdirSync(target, { recursive: true });
+    await shell.openPath(target);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('app:paths', () => ({
   install: app.isPackaged ? path.dirname(app.getPath('exe')) : app.getAppPath(),
   userData: app.getPath('userData'),
