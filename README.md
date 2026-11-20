@@ -14,7 +14,7 @@ release/1.19.0/Luma-Browser-Setup-1.19.0-x64.exe
 
 双击安装程序即可完成安装。安装程序支持选择安装目录，并会创建桌面与开始菜单快捷方式，无需管理员权限。主程序文件名为 `LumaBrowser.exe`（无空格，与 `chrome.exe`、`SogouExplorer.exe` 的习惯一致），快捷方式仍显示 “Luma Browser”。
 
-当前已发布 **v1.17.0**（2026-11-20），仓库版本 **v1.19.0**。已发布的版本可在 [GitHub Releases](https://github.com/nmaych/luma-browser/releases/latest) 直接下载：Release 附件包含 `Luma-Browser-Setup-<version>-x64.exe`、`latest.yml`、`.blockmap` 与 `checksums.txt`。`latest.yml` 是应用内自动更新的版本索引，`checksums.txt` 列出每个产物的 SHA256。
+当前已发布 **v1.19.0**（2026-11-20）。已发布的版本可在 [GitHub Releases](https://github.com/nmaych/luma-browser/releases/latest) 直接下载：Release 附件包含 `Luma-Browser-Setup-<version>-x64.exe`、`latest.yml`、`.blockmap` 与 `checksums.txt`。`latest.yml` 是应用内自动更新的版本索引，`checksums.txt` 列出每个产物的 SHA256。
 
 ## 目录布局
 
