@@ -261,6 +261,7 @@ interface LumaDesktopApi {
   getAppPaths: () => Promise<LumaAppPaths | null>;
   listExtensions: () => Promise<LumaExtension[]>;
   installExtension: (sourcePath?: string) => Promise<LumaExtensionResult>;
+  installExtensionFromCrx: (sourcePath?: string) => Promise<LumaExtensionResult>;
   setExtensionEnabled: (id: string, enabled: boolean) => Promise<LumaExtensionResult>;
   reloadExtension: (id: string) => Promise<LumaExtensionResult>;
   removeExtension: (id: string) => Promise<LumaExtensionResult>;
@@ -270,6 +271,11 @@ interface LumaDesktopApi {
     anchor: { x: number; y: number; width: number; height: number },
   ) => Promise<{ ok: boolean; error?: string; closed?: boolean; opened?: boolean }>;
   closeExtensionPopup: () => Promise<boolean>;
+  onOpenUrl: (callback: (url: string) => void) => () => void;
+  togglePictureInPicture: (
+    tabId: string,
+    incognito?: boolean,
+  ) => Promise<{ ok: boolean; state?: 'opened' | 'closed' | 'no-video' | 'unsupported'; error?: string }>;
   onExtensionsChanged: (callback: (list: LumaExtension[]) => void) => () => void;
   onUpdateState: (callback: (state: LumaUpdateState) => void) => () => void;
   onMemoryPressure: (callback: (info: LumaMemoryPressure) => void) => () => void;

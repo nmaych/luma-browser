@@ -125,6 +125,8 @@ export interface Preferences {
   startupBehavior: 'continue' | 'new-tab';
   /** Ask for a folder before each download; off saves straight to the download folder. */
   downloadsAskWhere: boolean;
+  /** Record visited pages in history; off keeps existing entries but stops adding. */
+  rememberHistory: boolean;
   doubleClickClosesTab: boolean;
   rightClickClosesTab: boolean;
   showTabPreviews: boolean;

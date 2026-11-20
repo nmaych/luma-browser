@@ -5,6 +5,7 @@ import {
   Camera,
   Check,
   Clipboard,
+  Clock3,
   CloudOff,
   Cookie,
   Database,
@@ -12,6 +13,7 @@ import {
   Eye,
   EyeOff,
   FolderOpen,
+  PackageOpen,
   Globe2,
   HardDrive,
   Home,
@@ -262,6 +264,7 @@ export function SettingsPage({
   const [extensions, setExtensions] = useState<LumaExtension[]>([]);
   const [extensionBusy, setExtensionBusy] = useState<string | null>(null);
   const [extensionError, setExtensionError] = useState('');
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const engines = getAllSearchEngines(preferences.customSearchEngines);
   const currentEngine = engines.find((engine) => engine.id === preferences.searchEngine) ?? engines[0];
   const builtInHome = preferences.homePage === INTERNAL_ROUTES.home;
@@ -437,6 +440,21 @@ export function SettingsPage({
     }
   };
 
+  const installCrx = async () => {
+    if (!desktop?.installExtensionFromCrx) return;
+    setExtensionBusy('crx');
+    setExtensionError('');
+    try {
+      const result = await desktop.installExtensionFromCrx();
+      if (result?.list) setExtensions(result.list);
+      if (!result?.ok && !result?.cancelled) setExtensionError(result?.error ?? '安装扩展失败');
+    } catch (error) {
+      setExtensionError(error instanceof Error ? error.message : '安装扩展失败');
+    } finally {
+      setExtensionBusy(null);
+    }
+  };
+
   const toggleExtension = async (extension: LumaExtension, enabled: boolean) => {
     if (!desktop?.setExtensionEnabled) return;
     setExtensionError('');
@@ -466,6 +484,12 @@ export function SettingsPage({
 
   const removeExtension = async (extension: LumaExtension) => {
     if (!desktop?.removeExtension) return;
+    // Removing unloads code the user installed; ask once, inline.
+    if (confirmRemoveId !== extension.id) {
+      setConfirmRemoveId(extension.id);
+      return;
+    }
+    setConfirmRemoveId(null);
     setExtensionBusy(extension.id);
     setExtensionError('');
     try {
@@ -805,13 +829,13 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.18.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.19.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
           <section className="settings-panel" aria-live="polite">
             <PanelHeading
-              icon={activeSection === 'general' ? <SlidersHorizontal /> : activeSection === 'tabs' ? <PanelsTopLeft /> : activeSection === 'search' ? <Search /> : activeSection === 'shortcuts' ? <Keyboard /> : activeSection === 'permissions' ? <LockKeyhole /> : activeSection === 'privacy' ? <ShieldCheck /> : <Database />}
+              icon={activeSection === 'general' ? <SlidersHorizontal /> : activeSection === 'tabs' ? <PanelsTopLeft /> : activeSection === 'search' ? <Search /> : activeSection === 'shortcuts' ? <Keyboard /> : activeSection === 'permissions' ? <LockKeyhole /> : activeSection === 'privacy' ? <ShieldCheck /> : activeSection === 'extensions' ? <Puzzle /> : <Database />}
               title={sectionMeta[activeSection].title}
               description={sectionMeta[activeSection].description}
             />
@@ -1208,11 +1232,6 @@ export function SettingsPage({
 
             {activeSection === 'extensions' && (
               <div className="settings-content">
-                <PanelHeading
-                  icon={<Puzzle size={18} />}
-                  title="扩展"
-                  description="加载已解压的 Chrome 扩展（MV2 / MV3），或管理已安装的扩展。"
-                />
                 {!desktop ? (
                   <div className="settings-card"><p className="permission-empty">扩展仅在 Luma 桌面应用中可用。</p></div>
                 ) : (
@@ -1227,6 +1246,14 @@ export function SettingsPage({
                           <FolderOpen size={15} /> 打开目录
                         </button>
                         <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={extensionBusy === 'crx'}
+                          onClick={() => void installCrx()}
+                        >
+                          <PackageOpen size={15} /> {extensionBusy === 'crx' ? '正在安装…' : '安装 .crx'}
+                        </button>
+                        <button
                           className="primary-button"
                           type="button"
                           disabled={extensionBusy === 'install'}
@@ -1239,8 +1266,8 @@ export function SettingsPage({
                     {extensionError && <p className="form-error" role="alert">{extensionError}</p>}
                     {extensions.length === 0 ? (
                       <p className="extension-empty">
-                        还没有扩展。选择一个包含 <code>manifest.json</code> 的目录即可加载，Luma 会把它复制到
-                        <code> Luma Browser\Extensions</code> 并在每次启动时自动加载。
+                        还没有扩展。可以安装 <code>.crx</code> 安装包，或选择一个包含 <code>manifest.json</code> 的目录。
+                        Luma 会把扩展复制到 <code> Luma Browser\Extensions</code> 并在每次启动时自动加载。
                       </p>
                     ) : (
                       <div className="extension-list">
@@ -1255,6 +1282,9 @@ export function SettingsPage({
                               <div className="extension-row__meta">
                                 <em>MV{extension.manifestVersion}</em>
                                 {extension.hasBackground && <em>后台脚本</em>}
+                                {extension.permissions.length > 0 && (
+                                  <em title={extension.permissions.join('、')}>{extension.permissions.length} 项权限</em>
+                                )}
                                 {extension.matches.length > 0 && <em>{extension.matches.length} 条匹配规则</em>}
                                 {!extension.loaded && extension.enabled && <em className="is-warning">未加载</em>}
                               </div>
@@ -1281,14 +1311,14 @@ export function SettingsPage({
                                 <RefreshCw size={13} />
                               </button>
                               <button
-                                className="icon-button icon-button--small"
+                                className={`icon-button icon-button--small ${confirmRemoveId === extension.id ? 'is-danger' : ''}`}
                                 type="button"
-                                aria-label={`移除 ${extension.name}`}
-                                title="移除"
+                                aria-label={confirmRemoveId === extension.id ? `确认移除 ${extension.name}` : `移除 ${extension.name}`}
+                                title={confirmRemoveId === extension.id ? '再次点击确认移除' : '移除'}
                                 disabled={extensionBusy === extension.id}
                                 onClick={() => void removeExtension(extension)}
                               >
-                                <Trash2 size={13} />
+                                {confirmRemoveId === extension.id ? <span className="confirm-remove">确认</span> : <Trash2 size={13} />}
                               </button>
                             </div>
                           </div>
@@ -1457,6 +1487,21 @@ export function SettingsPage({
                   <span><ShieldCheck size={28} /></span>
                   <div><h3>你的浏览数据属于你</h3><p>书签、历史、设置和网站登录状态全部保存在本机。Luma 不上传浏览记录，也不会出售或分析个人数据。</p></div>
                 </div>
+                <div className="settings-card">
+                  <div className="settings-card__title"><Clock3 size={18} /><div><h3>浏览记忆</h3><p>关闭后不再记录新的访问历史，地址栏建议与「最近打开」也会随之减少；已存在的记录不会自动删除。</p></div></div>
+                  <div className="setting-row">
+                    <div><strong>记录浏览历史</strong><p>历史只保存在本机，可在「历史记录」页逐条删除或全部清除。</p></div>
+                    <label className="switch">
+                      <input
+                        aria-label="记录浏览历史"
+                        type="checkbox"
+                        checked={preferences.rememberHistory}
+                        onChange={(event) => onUpdate({ rememberHistory: event.target.checked })}
+                      />
+                      <span />
+                    </label>
+                  </div>
+                </div>
                 <div className="privacy-feature-grid">
                   <article><LockKeyhole /><div><strong>网站进程隔离</strong><p>每个外部网页运行在 Chromium 沙盒 WebView 中，已禁用 Node.js 能力。</p></div></article>
                   <article><Cookie /><div><strong>权限先询问</strong><p>摄像头、麦克风、位置和通知默认每次询问，可在权限管理中调整策略。</p></div></article>
@@ -1525,7 +1570,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.18.0'}</span>
+                    <span>版本 {appVersions?.app ?? '1.19.0'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>

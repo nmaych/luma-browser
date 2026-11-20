@@ -12,6 +12,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   homePage: INTERNAL_ROUTES.home,
   startupBehavior: 'continue',
   downloadsAskWhere: true,
+  rememberHistory: true,
   doubleClickClosesTab: true,
   rightClickClosesTab: false,
   showTabPreviews: true,

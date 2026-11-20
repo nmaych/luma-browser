@@ -42,6 +42,12 @@ interface NavigationBarProps {
   onNewTab: () => void;
   onReopen: () => void;
   onDownloads?: () => void;
+  /** Enabled extensions with a toolbar action; icons live in the address bar. */
+  extensionActions?: { id: string; name: string; icon: string | null }[];
+  onOpenExtension?: (
+    id: string,
+    anchor: { x: number; y: number; width: number; height: number },
+  ) => void;
   onIncognito?: () => void;
   onFullscreen?: () => void;
   onDevTools?: () => void;
@@ -58,6 +64,7 @@ interface NavigationBarProps {
   readerActive?: boolean;
   onToggleReader?: () => void;
   onScreenshot?: (options: { mode: 'save' | 'copy'; fullPage: boolean; selectRegion?: boolean }) => void;
+  onPictureInPicture?: () => void;
   translated?: boolean;
   translating?: boolean;
   translationTarget: string;
@@ -539,6 +546,32 @@ export function NavigationBar(props: NavigationBarProps) {
               {Boolean(props.downloadCount) && <span className="download-button__badge">{props.downloadCount}</span>}
             </IconButton>
           )}
+          {props.extensionActions && props.extensionActions.length > 0 && (
+            <div className="extension-actions" role="group" aria-label="扩展">
+              {props.extensionActions.map((extension) => (
+                <button
+                  key={extension.id}
+                  type="button"
+                  className="extension-action"
+                  title={extension.name}
+                  aria-label={`扩展 ${extension.name}`}
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    props.onOpenExtension?.(extension.id, {
+                      x: Math.round(window.screenX + rect.left),
+                      y: Math.round(window.screenY + rect.top),
+                      width: Math.round(rect.width),
+                      height: Math.round(rect.height),
+                    });
+                  }}
+                >
+                  {extension.icon
+                    ? <img src={extension.icon} alt="" width={16} height={16} />
+                    : <span className="extension-action__fallback">{extension.name.slice(0, 1).toUpperCase()}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <IconButton label="设置" active={page === 'settings'} onClick={props.onSettings}><Settings2 size={18} /></IconButton>
         </div>
         <BrowserMenu
@@ -563,6 +596,7 @@ export function NavigationBar(props: NavigationBarProps) {
           onPrint={props.onPrint}
           onSavePdf={props.onSavePdf}
           onScreenshot={props.onScreenshot ? () => props.onScreenshot?.({ mode: 'save', fullPage: false }) : undefined}
+          onPictureInPicture={props.onPictureInPicture}
           downloadCount={props.downloadCount}
           onSettings={props.onSettings}
         />

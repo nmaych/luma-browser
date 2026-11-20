@@ -641,3 +641,7 @@
 .extension-row__actions { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; }
 .extension-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; color: var(--text-muted); font-size: 11px; line-height: 1.8; }
 .extension-empty code { padding: 1px 4px; border-radius: 4px; background: var(--surface-soft); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
+
+/* 扩展移除的二次确认与权限摘要 */
+.extension-row__actions .is-danger { border-color: #e6b3b3; color: #b42318; background: #fef3f2; }
+.extension-row__actions .confirm-remove { padding: 0 2px; font-size: 10px; font-weight: 600; }

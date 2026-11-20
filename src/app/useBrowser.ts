@@ -165,6 +165,12 @@ export function useBrowser(options: UseBrowserOptions = {}) {
         : DEFAULT_PREFERENCES.searchEngine,
     };
   });
+  /** Written by syncWebPage (stable callback), so the flag travels through a ref. */
+  const rememberHistoryRef = useRef(preferences.rememberHistory);
+  useEffect(() => {
+    rememberHistoryRef.current = preferences.rememberHistory;
+  }, [preferences.rememberHistory]);
+
   const [activePanel, setActivePanel] = useState<PanelName>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -353,7 +359,7 @@ export function useBrowser(options: UseBrowserOptions = {}) {
           };
         }),
       );
-      if (parsed.isExternal && !isIncognito) {
+      if (parsed.isExternal && !isIncognito && rememberHistoryRef.current) {
         setHistory((current) => [
           { id: createId('history'), ...entry, favicon: getDefaultFavicon(parsed.url) },
           ...current,
@@ -627,7 +633,7 @@ export function useBrowser(options: UseBrowserOptions = {}) {
         return { ...item, entries };
       }),
     );
-    if (!isIncognito) {
+    if (!isIncognito && rememberHistoryRef.current) {
       setHistory((current) => [
         {
           id: createId('history'),

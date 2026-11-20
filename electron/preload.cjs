@@ -39,11 +39,18 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   getAppPaths: () => ipcRenderer.invoke('app:paths'),
   listExtensions: () => ipcRenderer.invoke('extensions:list'),
   installExtension: (sourcePath) => ipcRenderer.invoke('extensions:install', sourcePath),
+  installExtensionFromCrx: (sourcePath) => ipcRenderer.invoke('extensions:install-crx', sourcePath),
   setExtensionEnabled: (id, enabled) => ipcRenderer.invoke('extensions:set-enabled', id, enabled),
   reloadExtension: (id) => ipcRenderer.invoke('extensions:reload', id),
   removeExtension: (id) => ipcRenderer.invoke('extensions:remove', id),
   openExtensionsFolder: () => ipcRenderer.invoke('extensions:open-folder'),
   openExtensionPopup: (id, anchor) => ipcRenderer.invoke('extensions:popup', id, anchor),
+  togglePictureInPicture: (tabId, incognito) => ipcRenderer.invoke('page:picture-in-picture', tabId, incognito),
+  onOpenUrl: (callback) => {
+    const listener = (_event, url) => callback(url);
+    ipcRenderer.on('window:open-url', listener);
+    return () => ipcRenderer.removeListener('window:open-url', listener);
+  },
   closeExtensionPopup: () => ipcRenderer.invoke('extensions:close-popup'),
   onExtensionsChanged: (callback) => {
     const listener = (_event, list) => callback(list);

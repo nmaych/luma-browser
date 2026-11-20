@@ -2109,6 +2109,30 @@ ipcMain.handle('window:move-to', (event, target) => {
   }
 });
 
+ipcMain.handle('page:picture-in-picture', async (_event, tabId, incognito) => {
+  const manager = pageViewsFor(Boolean(incognito));
+  const entry = manager.webContents.find((item) => item.tabId === tabId);
+  if (!entry) return { ok: false, error: '这个标签页还没有加载页面' };
+  try {
+    const result = await entry.webContents.executeJavaScript(`(async () => {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        return { state: 'closed' };
+      }
+      if (document.pictureInPictureEnabled === false) return { state: 'unsupported' };
+      const videos = [...document.querySelectorAll('video')].filter((video) => video.readyState > 0);
+      if (videos.length === 0) return { state: 'no-video' };
+      // Largest visible video wins: that is the one the user is watching.
+      videos.sort((left, right) => (right.clientWidth * right.clientHeight) - (left.clientWidth * left.clientHeight));
+      await videos[0].requestPictureInPicture();
+      return { state: 'opened' };
+    })()`, true);
+    return { ok: true, ...(result ?? {}) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : '无法进入画中画' };
+  }
+});
+
 ipcMain.handle('page-view:ensure', (event, tabId, url, incognito) => {
   if (typeof tabId !== 'string' || !tabId) return null;
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -2399,7 +2423,17 @@ async function openExtensionPopup(extensionId, anchor) {
   extensionPopupOwner = extensionId;
 
   let ready = false;
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Extension popups often link to their own pages (options, help). Those open
+  // in a normal tab instead of being silently blocked.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isSafeHttpUrl(url) && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:open-url', url);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    return { action: 'deny' };
+  });
   win.webContents.once('did-finish-load', () => {
     void (async () => {
       try {
@@ -2472,6 +2506,25 @@ ipcMain.handle('extensions:install', async (event, sourcePath) => {
     source = result.filePaths[0];
   }
   const outcome = await extensionManager.install(source);
+  return { ...outcome, list: extensionManager.list() };
+});
+ipcMain.handle('extensions:install-crx', async (event, sourcePath) => {
+  if (!extensionManager) return { ok: false, error: '扩展管理器尚未就绪', list: [] };
+  let source = typeof sourcePath === 'string' && sourcePath ? sourcePath : '';
+  if (!source) {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择扩展安装包（.crx）',
+      properties: ['openFile'],
+      filters: [{ name: 'Chrome 扩展', extensions: ['crx'] }],
+      buttonLabel: '安装',
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, cancelled: true, list: extensionManager.list() };
+    }
+    source = result.filePaths[0];
+  }
+  const outcome = await extensionManager.installCrx(source);
   return { ...outcome, list: extensionManager.list() };
 });
 ipcMain.handle('extensions:set-enabled', (_event, id, enabled) => (

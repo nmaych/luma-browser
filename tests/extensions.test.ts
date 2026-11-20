@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
@@ -194,5 +195,135 @@ describe('toolbar action metadata', () => {
     expect(action.title).toBe('Probe Extension');
     // Leading slashes are normalized so the chrome-extension:// URL stays valid.
     expect(action.popup).toBe('popup.html');
+  });
+});
+
+/** Minimal CRC32 for the hand-built ZIP below. */
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let value = i;
+    for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xEDB88320 ^ (value >>> 1) : value >>> 1;
+    table[i] = value >>> 0;
+  }
+  return table;
+})();
+const crc32 = (buffer: Buffer) => {
+  let crc = 0xFFFFFFFF;
+  for (const byte of buffer) crc = crcTable[(crc ^ byte) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+};
+
+/**
+ * Builds a stored (uncompressed) ZIP by hand. adm-zip under the jsdom test
+ * environment produces archives its own reader cannot open, and the parser only
+ * needs to prove it reads a standard ZIP payload.
+ */
+const storedZip = (files: Record<string, string>) => {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(files)) {
+    const data = Buffer.from(content, 'utf8');
+    const nameBytes = Buffer.from(name, 'utf8');
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    local.writeUInt16LE(0, 28);
+    locals.push(local, nameBytes, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x0800, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(0, 12);
+    central.writeUInt16LE(0, 14);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(central, nameBytes);
+    offset += local.length + nameBytes.length + data.length;
+  }
+  const centralBuffer = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(Object.keys(files).length, 8);
+  end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt32LE(centralBuffer.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, centralBuffer, end]);
+};
+
+/** Wraps a ZIP payload in a CRX3 header so the parser can be exercised offline. */
+const makeCrx = (files: Record<string, string>) => {
+  const zipBuffer = storedZip(files);
+  const header = Buffer.from('crx3-header');
+  const prefix = Buffer.alloc(12);
+  prefix.writeUInt32LE(0x34327243, 0);
+  prefix.writeUInt32LE(3, 4);
+  prefix.writeUInt32LE(header.length, 8);
+  return Buffer.concat([prefix, header, zipBuffer]);
+};
+
+describe('crx packages', () => {
+  it('unpacks a .crx and installs the extension', async () => {
+    const root = tempDir('luma-crx-root-');
+    const session = createSession();
+    const manager = createExtensionManager({ directory: root, session });
+    const file = path.join(tempDir('luma-crx-src-'), 'probe.crx');
+    writeFileSync(file, makeCrx({
+      'manifest.json': JSON.stringify(MV3),
+      'content.js': 'void 0;',
+      'bg.js': 'void 0;',
+      '_metadata/verified_contents.json': '{}',
+    }));
+
+    const result = await manager.installCrx(file);
+    expect(result.ok).toBe(true);
+    expect(session.loadExtension).toHaveBeenCalledTimes(1);
+    const installed = manager.list();
+    expect(installed).toHaveLength(1);
+    expect(installed[0]).toMatchObject({ name: 'Probe Extension', version: '1.0.0', loaded: true });
+    // Chrome metadata is not copied into the managed folder.
+    expect(existsSync(path.join(root, installed[0].id, '_metadata'))).toBe(false);
+  });
+
+  it('rejects a file that is not a crx container', async () => {
+    const manager = createExtensionManager({ directory: tempDir('luma-crx-root-'), session: createSession() });
+    const file = path.join(tempDir('luma-crx-src-'), 'not.crx');
+    writeFileSync(file, 'just text');
+    const result = await manager.installCrx(file);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('crx');
+  });
+
+  it('refuses zip entries that escape the target folder', async () => {
+    const manager = createExtensionManager({ directory: tempDir('luma-crx-root-'), session: createSession() });
+    const file = path.join(tempDir('luma-crx-src-'), 'evil.crx');
+    writeFileSync(file, makeCrx({
+      'manifest.json': JSON.stringify(MV3),
+      '../escape.txt': 'nope',
+    }));
+    const result = await manager.installCrx(file);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('非法路径');
   });
 });

@@ -1,4 +1,4 @@
-import { BookOpen, Camera, Check, Clock3, Code2, Download, EyeOff, FileDown, Maximize, MoreVertical, Plus, Printer, RotateCcw, Settings2, Star, Wifi, WifiOff } from 'lucide-react';
+import { BookOpen, Camera, Check, Clock3, Code2, Download, EyeOff, FileDown, Maximize, MoreVertical, PictureInPicture2, Plus, Printer, RotateCcw, Settings2, Star, Wifi, WifiOff } from 'lucide-react';
 import type { RefObject } from 'react';
 import { getAllSearchEngines } from '../../data/searchEngines';
 import type { CustomSearchEngine, SearchEngine } from '../../types';
@@ -29,6 +29,7 @@ interface BrowserMenuProps {
   onPrint?: () => void;
   onSavePdf?: () => void;
   onScreenshot?: () => void;
+  onPictureInPicture?: () => void;
 }
 
 export function BrowserMenu(props: BrowserMenuProps) {
@@ -65,6 +66,9 @@ export function BrowserMenu(props: BrowserMenuProps) {
             )}
             {props.onScreenshot && (
               <button type="button" onClick={action(props.onScreenshot)}><Camera />网页截图<span>Ctrl + Shift + X</span></button>
+            )}
+            {props.onPictureInPicture && (
+              <button type="button" onClick={action(props.onPictureInPicture)}><PictureInPicture2 />视频小窗</button>
             )}
             <div className="menu-divider" />
             <button type="button" onClick={action(props.onBookmarks)}><BookOpen />书签管理器</button>

@@ -753,7 +753,16 @@ test('keeps the window alive when a bookmark folder is double-clicked', async ()
     await page.keyboard.press('Control+Shift+B');
     await expect(page.locator('.bookmarks-bar')).toBeVisible();
   }
-  await page.locator('.bookmarks-bar').getByRole('button', { name: /工作资料/ }).dblclick();
+  // Guarantee the fixture exists: an earlier test may have removed or renamed
+  // the folder, and this test must not depend on what ran before it.
+  const folderButton = page.locator('.bookmarks-bar').getByRole('button', { name: /工作资料/ });
+  if (await folderButton.count() === 0) {
+    await main.getByRole('button', { name: '新建文件夹' }).click();
+    await page.getByLabel('文件夹名称').fill('工作资料');
+    await page.getByLabel('文件夹名称').press('Enter');
+    await expect(main.getByRole('button', { name: /^工作资料/ })).toBeVisible();
+  }
+  await folderButton.dblclick();
   // A double click used to open and immediately close the folder menu; the
   // second click must not be treated as "dismiss".
   const folderMenu = page.getByRole('menu', { name: /文件夹 工作资料/ });
@@ -1854,6 +1863,9 @@ test('opens an extension popup from the toolbar and closes it again', async () =
 
   const toolbarIcon = page.getByRole('button', { name: '扩展 Popup Probe' });
   await expect(toolbarIcon).toBeVisible({ timeout: 10_000 });
+  // Toolbar icons live in the address bar row, not in the tab strip.
+  expect(await page.locator('.navigation-bar .extension-action').count()).toBeGreaterThan(0);
+  expect(await page.locator('.browser-tabbar .extension-actions').count()).toBe(0);
 
   const popupPromise = app.waitForEvent('window', { timeout: 15_000 });
   await toolbarIcon.click();
@@ -1919,4 +1931,17 @@ test('moves between tabs with the arrow keys', async () => {
   // Only the active tab is in the tab order.
   const focusable = await page.locator('.browser-tab__main[tabindex="0"]').count();
   expect(focusable).toBe(1);
+});
+
+
+test('offers picture-in-picture for the current page', async () => {
+  const address = page.getByRole('textbox', { name: '地址和搜索栏' });
+  await address.fill('example.com/?pip=1');
+  await address.press('Enter');
+  await expect.poll(async () => (await pageInfo()).url, { timeout: 30_000 }).toContain('pip=1');
+
+  await page.getByRole('button', { name: '自定义及控制 Luma' }).click();
+  await page.getByRole('button', { name: '视频小窗' }).click();
+  // No <video> on the page: the app must explain instead of failing silently.
+  await expect(page.locator('.toast').filter({ hasText: /没有正在播放的视频/ })).toBeVisible();
 });

@@ -1,6 +1,8 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const AdmZip = require('adm-zip');
 
 /**
  * Unpacked extension support.
@@ -16,7 +18,8 @@ const crypto = require('node:crypto');
 const MANIFEST_FILE = 'manifest.json';
 const STATE_FILE = 'extensions.json';
 const MAX_EXTENSION_BYTES = 100 * 1024 * 1024;
-const SKIPPED_NAMES = new Set(['.git', '.svn', 'node_modules/.cache']);
+const SKIPPED_NAMES = new Set(['.git', '.svn', 'node_modules/.cache', '_metadata']);
+const CRX_MAGIC = 0x34327243; // 'Cr24' little-endian
 const STATE_SCHEMA = 1;
 
 /** Text that ends up in the settings list is clamped and stripped of NULs. */
@@ -154,13 +157,15 @@ function summarizeManifest(manifest, directory = '') {
 }
 
 /** Folder-safe identifier: readable prefix plus a short digest for uniqueness. */
-function folderNameFor(manifest, sourceDir) {
+function folderNameFor(manifest) {
   const slug = cleanText(manifest.name, 60)
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
     .replace(/^-+|-+$/g, '')
     || 'extension';
-  const digest = crypto.createHash('sha1').update(`${manifest.name}@${manifest.version}:${sourceDir}`).digest('hex');
+  // Identity is name + version only: the same extension must land in the same
+  // folder whether it came from a directory or a .crx.
+  const digest = crypto.createHash('sha1').update(`${manifest.name}@${manifest.version}`).digest('hex');
   return `${slug.slice(0, 40)}-${digest.slice(0, 8)}`;
 }
 
@@ -207,6 +212,78 @@ function copyExtension(from, to) {
       }
     },
   });
+}
+
+/**
+ * Splits a CRX container into its ZIP payload.
+ * CRX2 stores two length-prefixed blobs (public key, signature); CRX3 stores a
+ * single protobuf header.
+ */
+function crxPayload(filePath) {
+  let buffer;
+  try {
+    buffer = fs.readFileSync(filePath);
+  } catch {
+    return { ok: false, error: '无法读取文件' };
+  }
+  if (buffer.length < 16 || buffer.readUInt32LE(0) !== CRX_MAGIC) {
+    return { ok: false, error: '这不是有效的 .crx 文件' };
+  }
+  const version = buffer.readUInt32LE(4);
+  let offset;
+  if (version === 2) {
+    offset = 16 + buffer.readUInt32LE(8) + buffer.readUInt32LE(12);
+  } else if (version === 3) {
+    offset = 12 + buffer.readUInt32LE(8);
+  } else {
+    return { ok: false, error: `不支持的 CRX 版本：${version}` };
+  }
+  if (!Number.isFinite(offset) || offset <= 0 || offset >= buffer.length) {
+    return { ok: false, error: '.crx 头部已损坏' };
+  }
+  return { ok: true, zip: buffer.subarray(offset) };
+}
+
+/** Extracts a ZIP payload, refusing entries that would escape the target. */
+function extractZipTo(zipBuffer, target) {
+  const root = path.resolve(target);
+  fs.mkdirSync(root, { recursive: true });
+  let zip;
+  try {
+    // Copy the slice: adm-zip reads the underlying ArrayBuffer when given a
+    // Buffer view, which breaks when the payload starts mid-buffer.
+    zip = new AdmZip(Buffer.from(zipBuffer));
+  } catch {
+    return { ok: false, error: '扩展包已损坏' };
+  }
+  for (const entry of zip.getEntries()) {
+    if (entry.entryName.startsWith('_metadata/')) continue;
+    const resolved = path.resolve(root, entry.entryName);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+      return { ok: false, error: '扩展包包含非法路径' };
+    }
+    if (entry.isDirectory) {
+      fs.mkdirSync(resolved, { recursive: true });
+      continue;
+    }
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    fs.writeFileSync(resolved, entry.getData());
+  }
+  return { ok: true };
+}
+
+/** Some packs wrap everything in a single top-level folder. */
+function findExtensionRoot(directory) {
+  if (fs.existsSync(path.join(directory, MANIFEST_FILE))) return directory;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  } catch {
+    return directory;
+  }
+  if (entries.length !== 1) return directory;
+  const nested = path.join(directory, entries[0].name);
+  return fs.existsSync(path.join(nested, MANIFEST_FILE)) ? nested : directory;
 }
 
 function createExtensionManager({ directory, session, log = () => {}, onChange = () => {} }) {
@@ -383,7 +460,7 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
       return { ok: false, error: `扩展体积超过上限（${Math.round(size / 1024 / 1024)} MB > 100 MB）` };
     }
 
-    const id = folderNameFor(parsed.manifest, source);
+    const id = folderNameFor(parsed.manifest);
     const target = path.join(directory, id);
     if (fs.existsSync(target)) {
       return { ok: false, error: '同名同版本的扩展已经安装，请先移除再重新加载' };
@@ -408,6 +485,30 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
     if (entry) await loadEntry(entry);
     notify();
     return { ok: true, extension: entry ? toPublic(entry) : null, list: list() };
+  }
+
+  /**
+   * Installs a `.crx` package: CRX is a ZIP with a signed header, so the archive
+   * is unwrapped into a temp folder and then follows the directory install path.
+   */
+  async function installCrx(filePath) {
+    const payload = crxPayload(typeof filePath === 'string' ? filePath : '');
+    if (!payload.ok) return { ok: false, error: payload.error };
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luma-crx-'));
+    try {
+      const unpacked = path.join(workDir, 'unpacked');
+      const extracted = extractZipTo(payload.zip, unpacked);
+      if (!extracted.ok) return { ok: false, error: extracted.error };
+      const root = findExtensionRoot(unpacked);
+      const outcome = await install(root);
+      return { ...outcome, list: list() };
+    } finally {
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+      } catch {
+        // A locked temp folder is harmless and cleaned up by the OS later.
+      }
+    }
   }
 
   async function setEnabled(id, enabled) {
@@ -451,6 +552,7 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
     list,
     loadAll,
     install,
+    installCrx,
     setEnabled,
     reload,
     remove,
@@ -462,6 +564,7 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
 
 module.exports = {
   createExtensionManager,
+  crxPayload,
   describeAction,
   summarizeManifest,
   validateManifest,
