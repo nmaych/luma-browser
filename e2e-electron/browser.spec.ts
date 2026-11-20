@@ -858,6 +858,9 @@ test('opens settings in a new tab and applies webpage font and zoom preferences'
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
   await expect(page.getByRole('tab')).toHaveCount(tabCount + 1);
+  // Settings remember the last section, so make sure 通用 is selected.
+  await page.getByRole('button', { name: '通用', exact: true }).click();
+  await expect(page.getByLabel('网页缩放')).toBeVisible();
 
   await page.getByLabel('网页缩放').evaluate((element, value) => {
     const input = element as HTMLInputElement;
@@ -1944,4 +1947,25 @@ test('offers picture-in-picture for the current page', async () => {
   await page.getByRole('button', { name: '视频小窗' }).click();
   // No <video> on the page: the app must explain instead of failing silently.
   await expect(page.locator('.toast').filter({ hasText: /没有正在播放的视频/ })).toBeVisible();
+});
+
+test('returns to the same settings section and scroll offset', async () => {
+  const address = page.getByRole('textbox', { name: '地址和搜索栏' });
+  await address.fill('luma://settings');
+  await address.press('Enter');
+  await page.getByRole('button', { name: '隐私与安全' }).click();
+  await expect(page.getByRole('heading', { name: '隐私与安全' })).toBeVisible();
+  await page.evaluate(() => document.querySelector('.settings-page')?.scrollTo?.({ top: 240 }));
+  await page.waitForTimeout(500);
+  const before = await page.evaluate(() => Math.round(document.querySelector('.settings-page')?.scrollTop ?? 0));
+  expect(before).toBeGreaterThan(50);
+
+  await page.getByRole('button', { name: '新建标签页 (Ctrl+T)' }).click();
+  await page.waitForTimeout(500);
+  await page.locator('.browser-tab').first().click();
+  await expect(page.getByRole('heading', { name: '隐私与安全' })).toBeVisible();
+  await expect.poll(
+    () => page.evaluate(() => Math.round(document.querySelector('.settings-page')?.scrollTop ?? 0)),
+    { timeout: 5_000 },
+  ).toBeGreaterThan(before - 40);
 });

@@ -197,7 +197,7 @@ npm run dist:dir
 
 - `dist/`：React 渲染层静态文件
 - `release/1.19.0/win-unpacked/`：可直接运行的免安装应用目录（入口 `LumaBrowser.exe`）
-- `release/1.19.0/Luma-Browser-Setup-1.19.0-x64.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `2A7C64602B310F98C2CB5A191BE3BDCDC8B21FEBEB3BD82186DE87E3376398ED`）
+- `release/1.19.0/Luma-Browser-Setup-1.19.0-x64.exe`：当前版本的 Windows 安装程序（118.8 MB，SHA256 `9D313F16E9794151C3E30CF37AB154DE5794F432F417C59CEDB62413BA6451DE`）
 - `release/1.19.0/latest.yml`、`.blockmap`：自动更新索引与增量更新差异图
 - `release/1.19.0/checksums.txt`：各产物的 SHA256 清单（由 `npm run dist` 自动生成）
 - `build/`：应用 PNG/ICO 图标

@@ -62,6 +62,13 @@ import { Logo } from '../components/common/Logo';
 import { SearchEngineMark } from '../components/common/SearchEngineMark';
 import { Modal } from '../components/common/Modal';
 
+/**
+ * Remembers the section and scroll offset of the settings page. Internal pages
+ * unmount when another tab becomes active, so without this the page snapped
+ * back to 通用 / top on every return.
+ */
+let settingsMemory: { section: SettingsSection; scrollTop: number } | null = null;
+
 type SettingsSection = 'general' | 'tabs' | 'search' | 'shortcuts' | 'adblock' | 'extensions' | 'passwords' | 'permissions' | 'privacy' | 'about';
 
 interface SettingsPageProps {
@@ -225,9 +232,44 @@ export function SettingsPage({
   onClearCache,
   onSleepBackgroundTabs,
 }: SettingsPageProps) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>('general');
+  const [activeSection, setActiveSection] = useState<SettingsSection>(() => settingsMemory?.section ?? 'general');
   const [sectionQuery, setSectionQuery] = useState('');
   const settingsScrollRef = useRef<HTMLDivElement | null>(null);
+  // Restore once the remembered section has painted. Sections load data
+  // asynchronously, so the height grows after mount and the offset is retried
+  // until it sticks (or a short budget runs out).
+  useEffect(() => {
+    const container = settingsScrollRef.current;
+    if (!container || !settingsMemory) return undefined;
+    const target = settingsMemory.scrollTop;
+    if (target <= 0) return undefined;
+    let attempts = 0;
+    let timer = 0;
+    const restore = () => {
+      if (!settingsScrollRef.current) return;
+      container.scrollTop = target;
+      attempts += 1;
+      if (Math.abs(container.scrollTop - target) > 8 && attempts < 25) {
+        timer = window.setTimeout(restore, 60);
+      }
+    };
+    restore();
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const container = settingsScrollRef.current;
+    if (!container) return undefined;
+    const remember = () => {
+      settingsMemory = { section: activeSection, scrollTop: container.scrollTop };
+    };
+    container.addEventListener('scroll', remember, { passive: true });
+    remember();
+    // Only detach: at unmount the element is already detached and reads 0,
+    // which would erase the offset the user just left.
+    return () => container.removeEventListener('scroll', remember);
+  }, [activeSection]);
+
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmClearData, setConfirmClearData] = useState(false);
   const [clearingData, setClearingData] = useState(false);
