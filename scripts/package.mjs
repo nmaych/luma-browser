@@ -49,6 +49,15 @@ const result = spawnSync(process.execPath, args, {
 });
 
 if (result.error) throw result.error;
+if (result.status === 0 && !directoryOnly) {
+  // Surface the signing decision instead of discovering it at download time.
+  const installer = join(outputDir, `Luma-Browser-Setup-${version}-x64.exe`);
+  const signing = spawnSync(process.execPath, [join(root, 'scripts', 'signing-status.mjs'), installer], {
+    stdio: 'inherit',
+  });
+  if (signing.status !== 0) console.warn('[package] Signing check reported a problem.');
+}
+
 if (result.status === 0) {
   const { removed, failed } = cleanPortableBuilds(root, version);
   console.log(`[package] Removed ${removed.length} old portable folder(s); installers were kept.`);

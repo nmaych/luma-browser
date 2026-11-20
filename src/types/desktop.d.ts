@@ -369,6 +369,7 @@ interface LumaDesktopApi {
   configureShortcuts: (
     shortcuts: Record<string, string>,
     bossKey: string,
+    options?: { downloadsAskWhere?: boolean },
   ) => Promise<{ bossKeyRegistered: boolean }>;
   listDownloads: () => Promise<LumaDownloadRecord[]>;
   cancelDownload: (id: string) => Promise<boolean>;

@@ -10,6 +10,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   showBookmarksBar: true,
   reduceMotion: false,
   homePage: INTERNAL_ROUTES.home,
+  startupBehavior: 'continue',
+  downloadsAskWhere: true,
   doubleClickClosesTab: true,
   rightClickClosesTab: false,
   showTabPreviews: true,

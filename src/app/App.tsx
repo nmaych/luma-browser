@@ -434,7 +434,9 @@ export function App() {
   useEffect(() => {
     if (!desktop?.configureShortcuts) return undefined;
     let active = true;
-    void desktop.configureShortcuts(browser.preferences.shortcuts, browser.preferences.bossKey).then((result) => {
+    void desktop.configureShortcuts(browser.preferences.shortcuts, browser.preferences.bossKey, {
+      downloadsAskWhere: browser.preferences.downloadsAskWhere,
+    }).then((result) => {
       if (!active) return;
       if (result.bossKeyRegistered) {
         warnedBossKey.current = null;

@@ -186,6 +186,20 @@ export function TabStrip(props: TabStripProps) {
   }, [props.activeTabId, props.onSelect, props.scrollSwitches, props.tabs]);
 
   useEffect(() => {
+    const id = keyboardFocusId.current;
+    if (!id || id !== props.activeTabId) return undefined;
+    keyboardFocusId.current = null;
+    const node = tabListRef.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(id)}"] .browser-tab__main`);
+    if (!node) return undefined;
+    // Activating a tab attaches a native page view, which takes keyboard focus
+    // away from the strip; win it back so the next arrow key keeps working.
+    const timer = window.setTimeout(() => {
+      if (document.activeElement !== node) node.focus();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [props.activeTabId]);
+
+  useEffect(() => {
     const node = tabListRef.current?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(props.activeTabId)}"]`);
     if (!node) return;
     const reduceMotion = document.documentElement.dataset.reduceMotion === 'true';
@@ -193,6 +207,22 @@ export function TabStrip(props: TabStripProps) {
       node.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
     }
   }, [props.activeTabId, props.tabs.length]);
+
+  /** Set while an arrow-key navigation is in flight; the page view may steal focus. */
+  const keyboardFocusId = useRef<string | null>(null);
+
+  /** Roving tabindex: arrow keys move focus and selection between tabs. */
+  const focusTabAt = (index: number) => {
+    const list = props.tabs;
+    if (list.length === 0) return;
+    const next = (index + list.length) % list.length;
+    keyboardFocusId.current = list[next].id;
+    props.onSelect(list[next].id);
+    // Focus synchronously: the node survives the re-render (keys are tab ids).
+    tabListRef.current
+      ?.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(list[next].id)}"] .browser-tab__main`)
+      ?.focus();
+  };
 
   const scheduleHoverPreview = (event: MouseEvent<HTMLDivElement>, tab: BrowserTab) => {
     if (!props.showPreviews || draggingId) return;
@@ -511,7 +541,24 @@ export function TabStrip(props: TabStripProps) {
                 className="browser-tab__main"
                 role="tab"
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
                 onClick={() => props.onSelect(tab.id)}
+                onKeyDown={(event) => {
+                  const index = props.tabs.findIndex((item) => item.id === tab.id);
+                  if (event.key === 'ArrowRight') {
+                    event.preventDefault();
+                    focusTabAt(index + 1);
+                  } else if (event.key === 'ArrowLeft') {
+                    event.preventDefault();
+                    focusTabAt(index - 1);
+                  } else if (event.key === 'Home') {
+                    event.preventDefault();
+                    focusTabAt(0);
+                  } else if (event.key === 'End') {
+                    event.preventDefault();
+                    focusTabAt(props.tabs.length - 1);
+                  }
+                }}
                 title={tab.pinned ? `${entry.title}（已固定）` : entry.title}
               >
                 <span className="browser-tab__favicon">

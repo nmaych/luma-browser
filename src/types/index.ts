@@ -121,6 +121,10 @@ export interface Preferences {
   reduceMotion: boolean;
   /** URL opened by the home button; `luma://home` uses the built-in page. */
   homePage: string;
+  /** What the first window shows: the previous session or a fresh new tab. */
+  startupBehavior: 'continue' | 'new-tab';
+  /** Ask for a folder before each download; off saves straight to the download folder. */
+  downloadsAskWhere: boolean;
   doubleClickClosesTab: boolean;
   rightClickClosesTab: boolean;
   showTabPreviews: boolean;

@@ -70,6 +70,8 @@ const itemKey = (item: BarItem) => (item.kind === 'bookmark' ? `bookmark-${item.
 export function BookmarksBar(props: BookmarksBarProps) {
   const [menu, setMenu] = useState<BarMenu | null>(null);
   const [folderMenu, setFolderMenu] = useState<FolderMenuState | null>(null);
+  /** A double click sends two clicks; the second must not close what the first opened. */
+  const lastFolderOpen = useRef<{ id: string; at: number } | null>(null);
   const [overflowMenu, setOverflowMenu] = useState<OverflowMenuState | null>(null);
   const [expandedFolder, setExpandedFolder] = useState<string | null>(null);
   const [dragging, setDragging] = useState<DragItem | null>(null);
@@ -152,9 +154,20 @@ export function BookmarksBar(props: BookmarksBarProps) {
     // React may run the updater after the event is dispatched, when currentTarget is null.
     const rect = event.currentTarget.getBoundingClientRect();
     const x = Math.max(8, Math.min(rect.left, window.innerWidth - FOLDER_MENU_WIDTH - 8));
+    const now = Date.now();
     setMenu(null);
     setOverflowMenu(null);
-    setFolderMenu((current) => (current?.folder.id === folder.id ? null : { folder, x, y: rect.bottom + 5 }));
+    setFolderMenu((current) => {
+      if (current?.folder.id === folder.id) {
+        const recent = lastFolderOpen.current;
+        // Double-clicking a folder used to open and immediately close its menu.
+        if (recent && recent.id === folder.id && now - recent.at < 500) return current;
+        lastFolderOpen.current = null;
+        return null;
+      }
+      lastFolderOpen.current = { id: folder.id, at: now };
+      return { folder, x, y: rect.bottom + 5 };
+    });
   };
 
   const openOverflow = (event: MouseEvent<HTMLButtonElement>) => {
@@ -281,6 +294,7 @@ export function BookmarksBar(props: BookmarksBarProps) {
         aria-hidden={hidden || undefined}
         tabIndex={hidden ? -1 : undefined}
         onClick={(event) => openFolder(event, folder)}
+        onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
         onContextMenu={(event) => {
           setFolderMenu(null);
           openMenu(event, { kind: 'folder', folder, x: event.clientX, y: event.clientY });
@@ -371,7 +385,19 @@ export function BookmarksBar(props: BookmarksBarProps) {
       )}
       {folderMenu && createPortal(
         <>
-          <button className="popover-dismiss" type="button" aria-label="关闭文件夹" onClick={() => setFolderMenu(null)} />
+          <button
+            className="popover-dismiss"
+            type="button"
+            aria-label="关闭文件夹"
+            onClick={() => {
+              // The second click of a double-click lands on this overlay; it
+              // must not close the menu the first click just opened.
+              const recent = lastFolderOpen.current;
+              if (recent && Date.now() - recent.at < 500) return;
+              lastFolderOpen.current = null;
+              setFolderMenu(null);
+            }}
+          />
           <div
             className="bookmarks-folder-menu popover"
             role="menu"

@@ -27,6 +27,7 @@ import {
   Palette,
   PanelsTopLeft,
   Plus,
+  Power,
   Puzzle,
   RefreshCw,
   RotateCcw,
@@ -804,7 +805,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.17.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.18.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -890,7 +891,7 @@ export function SettingsPage({
 
                 {desktop && (
                   <div className="settings-card">
-                    <div className="settings-card__title"><Download size={18} /><div><h3>下载位置</h3><p>下载时会询问保存位置，保存对话框默认打开下面的文件夹。</p></div></div>
+                    <div className="settings-card__title"><Download size={18} /><div><h3>下载位置</h3><p>{preferences.downloadsAskWhere ? '下载时会询问保存位置，对话框默认打开下面的文件夹。' : '下载会直接保存到下面的文件夹，不再询问。'}</p></div></div>
                     <div className="setting-row">
                       <div><strong>默认下载文件夹</strong><p className="download-path" title={downloadDirectory?.directory}>{downloadDirectory?.directory ?? '正在读取…'}</p></div>
                       <div className="download-location-actions">
@@ -902,9 +903,36 @@ export function SettingsPage({
                         )}
                       </div>
                     </div>
+                    <div className="setting-row">
+                      <div><strong>下载前询问保存位置</strong><p>关闭后所有下载直接保存到上面的文件夹，适合批量下载。</p></div>
+                      <label className="switch">
+                        <input
+                          aria-label="下载前询问保存位置"
+                          type="checkbox"
+                          checked={preferences.downloadsAskWhere}
+                          onChange={(event) => onUpdate({ downloadsAskWhere: event.target.checked })}
+                        />
+                        <span />
+                      </label>
+                    </div>
                     <p className="home-url-hint">默认位置是浏览器程序目录下的 LumaDownload 文件夹。</p>
                   </div>
                 )}
+
+                <div className="settings-card">
+                  <div className="settings-card__title"><Power size={18} /><div><h3>启动</h3><p>决定 Luma 打开时显示什么。上次的标签页始终保存在本地，选择“新标签页”时不会自动恢复。</p></div></div>
+                  <div className="setting-row">
+                    <div><strong>启动时</strong><p>恢复上次打开的标签页，或直接打开一个新标签页。</p></div>
+                    <select
+                      aria-label="启动时"
+                      value={preferences.startupBehavior}
+                      onChange={(event) => onUpdate({ startupBehavior: event.target.value as Preferences['startupBehavior'] })}
+                    >
+                      <option value="continue">继续上次的标签页</option>
+                      <option value="new-tab">打开新标签页</option>
+                    </select>
+                  </div>
+                </div>
 
                 <div className="settings-card">
                   <div className="settings-card__title"><Home size={18} /><div><h3>主页</h3><p>点击地址栏的主页按钮时打开。新标签页始终显示独立的快捷页面。</p></div></div>
@@ -1497,7 +1525,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.17.0'}</span>
+                    <span>版本 {appVersions?.app ?? '1.18.0'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>

@@ -120,7 +120,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
     return () => ipcRenderer.removeListener('page-view:event', listener);
   },
   fetchFavicon: (url) => ipcRenderer.invoke('favicon:fetch', url),
-  configureShortcuts: (shortcuts, bossKey) => ipcRenderer.invoke('settings:configure', { shortcuts, bossKey }),
+  configureShortcuts: (shortcuts, bossKey, options) => ipcRenderer.invoke('settings:configure', { shortcuts, bossKey, ...options }),
   listDownloads: () => ipcRenderer.invoke('downloads:list'),
   cancelDownload: (id) => ipcRenderer.invoke('downloads:cancel', id),
   pauseDownload: (id) => ipcRenderer.invoke('downloads:pause', id),

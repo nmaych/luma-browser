@@ -754,7 +754,16 @@ test('keeps the window alive when a bookmark folder is double-clicked', async ()
     await expect(page.locator('.bookmarks-bar')).toBeVisible();
   }
   await page.locator('.bookmarks-bar').getByRole('button', { name: /工作资料/ }).dblclick();
+  // A double click used to open and immediately close the folder menu; the
+  // second click must not be treated as "dismiss".
+  const folderMenu = page.getByRole('menu', { name: /文件夹 工作资料/ });
+  await expect(folderMenu).toBeVisible();
+  await expect(folderMenu.getByRole('menuitem', { name: /团队知识库/ })).toBeVisible();
   await page.waitForTimeout(300);
+  // Leave no menu behind: its full-screen dismiss layer would swallow clicks
+  // in later tests.
+  await page.keyboard.press('Escape');
+  await expect(folderMenu).toHaveCount(0);
   page.off('pageerror', onPageError);
 
   expect(errors).toEqual([]);
@@ -1886,4 +1895,28 @@ test('pins a tab to the left edge and unpins it from the context menu', async ()
   await pinned.first().click({ button: 'right' });
   await page.getByRole('menu', { name: '标签页选项' }).getByRole('menuitem', { name: /取消固定/ }).click();
   await expect(page.locator('.browser-tab.is-pinned')).toHaveCount(0);
+});
+
+test('moves between tabs with the arrow keys', async () => {
+  const newTab = page.getByRole('button', { name: '新建标签页 (Ctrl+T)' });
+  await newTab.click();
+  await newTab.click();
+  const tabs = page.locator('.browser-tab');
+  const total = await tabs.count();
+  expect(total).toBeGreaterThanOrEqual(3);
+
+  await tabs.nth(0).locator('.browser-tab__main').focus();
+  // Focusing a tab does not select it, so the baseline is the focused tab and
+  // not the active one.
+  const focusedId = await page.locator('.browser-tab__main:focus').evaluate(
+    (element) => element.closest('.browser-tab')?.getAttribute('data-tab-id') ?? '',
+  );
+  expect(focusedId).not.toBe('');
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => activeTabId(), { timeout: 5_000 }).not.toBe(focusedId);
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(() => activeTabId(), { timeout: 5_000 }).toBe(focusedId);
+  // Only the active tab is in the tab order.
+  const focusable = await page.locator('.browser-tab__main[tabindex="0"]').count();
+  expect(focusable).toBe(1);
 });

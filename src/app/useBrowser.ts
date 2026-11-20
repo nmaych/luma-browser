@@ -80,6 +80,10 @@ function persistableTabs(tabs: BrowserTab[]): PersistedTab[] {
 
 function loadTabs(): BrowserTab[] {
   if (initialTabs.length > 0) return initialTabs.map(createTabFromInitial);
+  // "Open a new tab" trades the previous session for a fast start; the tabs
+  // stay on disk until the new session overwrites them.
+  const startup = readStorage<Preferences>(STORAGE_KEYS.preferences, DEFAULT_PREFERENCES).startupBehavior;
+  if (startup === 'new-tab') return [createNewTab()];
   const saved = readStorage<BrowserTab[]>(STORAGE_KEYS.tabs, [], tabStorage);
   if (
     Array.isArray(saved) &&

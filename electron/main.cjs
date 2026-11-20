@@ -55,6 +55,8 @@ const DEFAULT_APP_SETTINGS = {
   bossKey: 'Ctrl+Shift+L',
   shortcuts: { ...DEFAULT_SHORTCUTS },
   blockedTotal: 0,
+  /** Mirrors the renderer preference: false saves downloads without a dialog. */
+  downloadsAskWhere: true,
 };
 
 // Chromium's HTTP cache is unbounded by default, which lets a profile grow into
@@ -1154,6 +1156,16 @@ function attachDownloadHandling(targetSession, incognito) {
         // Fall back to the interactive save dialog.
       }
     }
+    if (!item.getSavePath() && appSettings.downloadsAskWhere === false) {
+      // "Don't ask" means save straight into the configured folder.
+      const directory = downloadDirectoryInfo().directory;
+      try {
+        fs.mkdirSync(directory, { recursive: true });
+        item.setSavePath(uniqueDownloadPath(directory, filename));
+      } catch {
+        // Fall back to the interactive dialog below.
+      }
+    }
     if (!item.getSavePath()) {
       const directory = downloadDirectoryInfo().directory;
       try {
@@ -2209,6 +2221,9 @@ ipcMain.handle('settings:configure', (_event, payload) => {
   if (!payload || typeof payload !== 'object') return { bossKeyRegistered: Boolean(currentBossKey()) };
   if (typeof payload.bossKey === 'string' && payload.bossKey.length <= 64) {
     appSettings.bossKey = payload.bossKey;
+  }
+  if (typeof payload.downloadsAskWhere === 'boolean') {
+    appSettings.downloadsAskWhere = payload.downloadsAskWhere;
   }
   if (payload.shortcuts && typeof payload.shortcuts === 'object') {
     const next = { ...DEFAULT_SHORTCUTS };
