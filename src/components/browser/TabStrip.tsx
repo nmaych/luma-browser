@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Copy, EyeOff, Link2, Minus, Moon, PanelTopClose, PanelsTopLeft, Plus, RefreshCw, RotateCcw, Square, Star, Volume2, VolumeX, X } from 'lucide-react';
+import { ChevronDown, Copy, EyeOff, Link2, Minus, Moon, PanelTopClose, PanelsTopLeft, Pin, PinOff, Plus, RefreshCw, RotateCcw, Square, Star, Volume2, VolumeX, X } from 'lucide-react';
 import type { BrowserTab } from '../../types';
 import { displayUrl, getHost } from '../../utils/url';
 import { ContextMenu, type ContextMenuEntry } from '../common/ContextMenu';
@@ -34,6 +34,7 @@ interface TabStripProps {
   onBookmarkTab: (id: string) => void;
   onToggleMute: (id: string) => void;
   onSleepTab?: (id: string) => void;
+  onTogglePin?: (id: string) => void;
   onTearOff?: (id: string, point?: TabTearOffPoint) => void;
   /** A tab drag began: main creates the window that will follow the cursor. */
   onTearOffStart?: (id: string, point: Required<TabTearOffPoint>) => void;
@@ -319,6 +320,13 @@ export function TabStrip(props: TabStripProps) {
       onSelect: props.onNew,
     },
     {
+      id: 'pin',
+      label: selectedTab?.pinned ? '取消固定' : '固定标签页',
+      icon: selectedTab?.pinned ? <PinOff /> : <Pin />,
+      disabled: !props.onTogglePin,
+      onSelect: () => props.onTogglePin?.(contextMenu.id),
+    },
+    {
       id: 'duplicate',
       label: '复制标签页',
       icon: <Copy />,
@@ -442,7 +450,7 @@ export function TabStrip(props: TabStripProps) {
           const active = tab.id === props.activeTabId;
           return (
             <div
-              className={`browser-tab ${active ? 'is-active' : ''} ${tab.isSleeping ? 'is-sleeping' : ''} ${draggingId === tab.id ? 'is-dragging' : ''} ${dropTargetId === tab.id && draggingId !== tab.id ? `is-drop-target is-drop-${dropPosition}` : ''}`}
+              className={`browser-tab ${active ? 'is-active' : ''} ${tab.pinned ? 'is-pinned' : ''} ${tab.isSleeping ? 'is-sleeping' : ''} ${draggingId === tab.id ? 'is-dragging' : ''} ${dropTargetId === tab.id && draggingId !== tab.id ? `is-drop-target is-drop-${dropPosition}` : ''}`}
               key={tab.id}
               draggable
               data-tab-id={tab.id}
@@ -504,7 +512,7 @@ export function TabStrip(props: TabStripProps) {
                 role="tab"
                 aria-selected={active}
                 onClick={() => props.onSelect(tab.id)}
-                title={entry.title}
+                title={tab.pinned ? `${entry.title}（已固定）` : entry.title}
               >
                 <span className="browser-tab__favicon">
                   {tab.isSleeping
@@ -528,14 +536,16 @@ export function TabStrip(props: TabStripProps) {
                   {tab.isMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
                 </button>
               )}
-              <IconButton
-                className="browser-tab__close"
-                size="small"
-                label={`关闭 ${entry.title}`}
-                onClick={() => { clearHoverPreview(); props.onClose(tab.id); }}
-              >
-                <X size={14} />
-              </IconButton>
+              {!tab.pinned && (
+                <IconButton
+                  className="browser-tab__close"
+                  size="small"
+                  label={`关闭 ${entry.title}`}
+                  onClick={() => { clearHoverPreview(); props.onClose(tab.id); }}
+                >
+                  <X size={14} />
+                </IconButton>
+              )}
             </div>
           );
         })}

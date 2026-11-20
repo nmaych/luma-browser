@@ -1865,3 +1865,25 @@ test('opens an extension popup from the toolbar and closes it again', async () =
   expect(removed.ok).toBe(true);
   rmSync(extensionDir, { recursive: true, force: true });
 });
+
+test('pins a tab to the left edge and unpins it from the context menu', async () => {
+  await page.getByRole('button', { name: '新建标签页 (Ctrl+T)' }).click();
+  const tabs = page.locator('.browser-tab');
+  const total = await tabs.count();
+  const last = tabs.nth(total - 1);
+  await last.click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: '标签页选项' });
+  await menu.getByRole('menuitem', { name: /固定标签页/ }).click();
+
+  const pinned = page.locator('.browser-tab.is-pinned');
+  await expect(pinned).toHaveCount(1);
+  // Pinned tabs always move to the front and shrink to an icon.
+  await expect(page.locator('.browser-tab').first()).toHaveClass(/is-pinned/);
+  const width = await pinned.first().evaluate((element) => element.getBoundingClientRect().width);
+  expect(width).toBeLessThanOrEqual(50);
+  await expect(pinned.first().locator('.browser-tab__close')).toHaveCount(0);
+
+  await pinned.first().click({ button: 'right' });
+  await page.getByRole('menu', { name: '标签页选项' }).getByRole('menuitem', { name: /取消固定/ }).click();
+  await expect(page.locator('.browser-tab.is-pinned')).toHaveCount(0);
+});

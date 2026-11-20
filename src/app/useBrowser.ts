@@ -63,7 +63,7 @@ function createTabFromInitial(tab: LumaInitialTab): BrowserTab {
   };
 }
 
-type PersistedTab = Pick<BrowserTab, 'id' | 'entries' | 'historyIndex' | 'loadKey' | 'viewUrl' | 'favicon' | 'isMuted'>;
+type PersistedTab = Pick<BrowserTab, 'id' | 'entries' | 'historyIndex' | 'loadKey' | 'viewUrl' | 'favicon' | 'isMuted' | 'pinned'>;
 
 function persistableTabs(tabs: BrowserTab[]): PersistedTab[] {
   return tabs.map((tab) => ({
@@ -74,6 +74,7 @@ function persistableTabs(tabs: BrowserTab[]): PersistedTab[] {
     viewUrl: tab.viewUrl,
     favicon: tab.favicon,
     isMuted: tab.isMuted,
+    ...(tab.pinned ? { pinned: true } : {}),
   }));
 }
 
@@ -85,15 +86,21 @@ function loadTabs(): BrowserTab[] {
     saved.length > 0 &&
     saved.every((tab) => tab.id && Array.isArray(tab.entries) && tab.entries.length > 0)
   ) {
+    // Chrome only restores the active tab eagerly; the rest get a placeholder
+    // and are created the first time they are activated. Sleeping tabs are
+    // exactly that placeholder, so restoring marks them asleep.
+    const savedActive = readStorage<string>(STORAGE_KEYS.activeTab, '', tabStorage);
     return saved.map((tab) => {
       const entry = tab.entries[tab.historyIndex] ?? tab.entries[0];
+      const external = isExternalUrl(entry.url);
       return {
         ...tab,
-        viewUrl: tab.viewUrl ?? (isExternalUrl(entry.url) ? entry.url : undefined),
+        pinned: tab.pinned === true,
+        viewUrl: tab.viewUrl ?? (external ? entry.url : undefined),
         isLoading: false,
         progress: 0,
         error: null,
-        isSleeping: false,
+        isSleeping: external && tab.id !== savedActive,
       };
     });
   }
@@ -458,6 +465,26 @@ export function useBrowser(options: UseBrowserOptions = {}) {
     showToast({ tone: 'success', title: `已关闭右侧 ${removed.length} 个标签页` });
   }, [activeTabId, clearLoadingTimers, showToast]);
 
+  const togglePinTab = useCallback((tabId: string) => {
+    setTabs((current) => {
+      const target = current.find((tab) => tab.id === tabId);
+      if (!target) return current;
+      const willPin = !target.pinned;
+      const rest = current.filter((tab) => tab.id !== tabId);
+      const updated = { ...target, pinned: willPin };
+      if (willPin) {
+        // Pinned tabs always sit left of the unpinned ones.
+        const pinnedCount = rest.filter((tab) => tab.pinned).length;
+        rest.splice(pinnedCount, 0, updated);
+        return rest;
+      }
+      // Unpinning drops the tab right after the remaining pinned block.
+      const firstUnpinned = rest.findIndex((tab) => !tab.pinned);
+      rest.splice(firstUnpinned < 0 ? rest.length : firstUnpinned, 0, updated);
+      return rest;
+    });
+  }, []);
+
   const reorderTabs = useCallback((sourceId: string, targetId: string, position: 'before' | 'after' = 'before') => {
     if (sourceId === targetId) return;
     setTabs((current) => {
@@ -465,6 +492,9 @@ export function useBrowser(options: UseBrowserOptions = {}) {
       const targetIndex = current.findIndex((tab) => tab.id === targetId);
       if (sourceIndex < 0 || targetIndex < 0) return current;
       const moved = current[sourceIndex];
+      // Pinned and unpinned tabs are separate groups; dragging across the line
+      // is what "pin/unpin" is for.
+      if (Boolean(moved.pinned) !== Boolean(current[targetIndex].pinned)) return current;
       const next = current.filter((tab) => tab.id !== sourceId);
       const targetAfterRemoval = next.findIndex((tab) => tab.id === targetId);
       const insertIndex = Math.min(next.length, Math.max(0, targetAfterRemoval + (position === 'after' ? 1 : 0)));
@@ -1337,6 +1367,7 @@ export function useBrowser(options: UseBrowserOptions = {}) {
     closeOtherTabs,
     closeTabsToRight,
     reorderTabs,
+    togglePinTab,
     reopenClosedTab,
     goBack,
     goForward,

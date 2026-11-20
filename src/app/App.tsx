@@ -1987,6 +1987,7 @@ export function App() {
           onBookmarkTab={bookmarkTab}
           onToggleMute={browser.toggleTabMute}
           onSleepTab={browser.sleepTab}
+          onTogglePin={browser.togglePinTab}
           onTearOffStart={(tabId, point) => startTabDrag(tabId, point)}
           onTearOffMove={(tabId, point) => moveTabDrag(tabId, point)}
           onTearOffEnd={(tabId, point) => void finishTabDrag(tabId, point)}

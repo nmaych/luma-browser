@@ -389,3 +389,10 @@ body.is-resizing-devtools .web-content { pointer-events: none; }
 .extension-action:active { border-color: var(--border); }
 .extension-action img { width: 16px; height: 16px; object-fit: contain; }
 .extension-action__fallback { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: 9px; font-weight: 700; }
+
+/* 固定标签：只显示图标，宽度收窄，不提供关闭按钮 */
+.browser-tab.is-pinned { flex: 0 0 46px; width: 46px; min-width: 46px; max-width: 46px; padding: 2px 4px; justify-content: center; }
+.browser-tab.is-pinned .browser-tab__main { flex: 0 0 auto; justify-content: center; gap: 0; }
+.browser-tab.is-pinned .browser-tab__title { display: none; }
+.browser-tab.is-pinned .browser-tab__close { display: none; }
+.browser-tab.is-pinned.is-active::after { right: 6px; left: 6px; }

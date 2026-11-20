@@ -1,7 +1,7 @@
 {
   "name": "luma-browser",
   "productName": "Luma Browser",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "private": true,
   "description": "A lightweight standalone Electron web browser with real tabbed browsing.",
   "author": "Luma Browser",
@@ -73,7 +73,7 @@
       "runAsNode": false,
       "enableCookieEncryption": true,
       "enableNodeOptionsEnvironmentVariable": false,
-      "enableNodeCliInspectArguments": true,
+      "enableNodeCliInspectArguments": false,
       "enableEmbeddedAsarIntegrityValidation": true,
       "onlyLoadAppFromAsar": true,
       "loadBrowserProcessSpecificV8Snapshot": false

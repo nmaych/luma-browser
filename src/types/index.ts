@@ -41,6 +41,8 @@ export interface BrowserTab {
   isDesktopWeb?: boolean;
   /** The native guest was discarded to reclaim memory; activating the tab reloads it. */
   isSleeping?: boolean;
+  /** Pinned tabs stay at the left, shrink to their icon and survive a restart. */
+  pinned?: boolean;
 }
 
 export interface Bookmark {
