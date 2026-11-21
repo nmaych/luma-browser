@@ -24,7 +24,8 @@
     "test:packaged": "node scripts/verify-packaged.mjs",
     "typecheck": "tsc -b --pretty false",
     "clean:release": "node scripts/cleanRelease.mjs",
-    "verify:pageviews": "node scripts/verify-pageviews.mjs"
+    "verify:pageviews": "node scripts/verify-pageviews.mjs",
+    "publish:release": "node scripts/publish-release.mjs"
   },
   "build": {
     "appId": "com.luma.browser",

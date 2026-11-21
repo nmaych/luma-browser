@@ -181,4 +181,8 @@ GitHub 返回 201 且附件状态是 `uploaded`，但线上文件比本地少了
 5. 检查安装包地址支持 Range 请求（`curl -r 0-1023` 返回 `206`），自动更新的断点续传依赖它。
 6. 抽查一个旧版本 Release 的附件哈希，避免历史包在用户手动下载时损坏。
 
-脚本化版本：`/e/develop/.gh-tmp/upload.mjs`（临时脚本，逻辑是"上传 → 回读 → 比对 → 不一致删除重试"，最多 3 次）。
+脚本化版本：`npm run publish:release`（`scripts/publish-release.mjs`，只依赖 Node，不需要 `gh`）。
+它把上面 2–5 步串起来并且**先自检**：本地产物必须和 `checksums.txt` 对得上；本地 HEAD 不在 GitHub 上时
+按对象 API 重建同一个 SHA（仅在只差一次 push 的情况下可用，父提交必须已在远端）；上传后逐个下载回来算 SHA256，
+不一致就删掉重传，最多 3 次；最后校验 `releases/latest` 的版本号与安装包的 Range 请求返回 `206`。
+dry run：`node scripts/publish-release.mjs --dry-run`（只读，列出将要上传的内容）。
