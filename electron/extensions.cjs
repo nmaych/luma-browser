@@ -28,6 +28,91 @@ function cleanText(value, max = 200) {
   return value.replace(/\u0000/g, '').trim().slice(0, max);
 }
 
+/**
+ * Chrome extensions localise their manifest through `__MSG_key__` tokens that
+ * are resolved against `_locales/<locale>/messages.json`. Electron does not do
+ * that for us, so an extension would otherwise be listed as `__MSG_extName__`.
+ */
+function readLocaleMessages(directory, locale) {
+  if (!locale || typeof locale !== 'string' || locale.includes('..')) return null;
+  try {
+    const raw = fs.readFileSync(path.join(directory, '_locales', locale, 'messages.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function localeTable(directory, manifest) {
+  const fallback = typeof manifest.default_locale === 'string' ? manifest.default_locale : 'en';
+  return [
+    readLocaleMessages(directory, 'zh_CN'),
+    readLocaleMessages(directory, fallback),
+    readLocaleMessages(directory, 'en'),
+  ].filter(Boolean);
+}
+
+function resolveMessage(value, tables) {
+  if (typeof value !== 'string' || !value.includes('__MSG_')) return value;
+  return value.replace(/__MSG_([A-Za-z0-9_@.]+)__/g, (match, key) => {
+    for (const table of tables) {
+      const entry = table[key] || table[key.toLowerCase()];
+      if (entry && typeof entry.message === 'string' && entry.message) return entry.message;
+    }
+    return match;
+  });
+}
+
+/**
+ * APIs an extension may ask for that this Electron build does not provide.
+ * Keeping the list explicit lets the manager explain *why* an extension loads
+ * but does not work, instead of showing a green "已加载" badge and nothing else.
+ */
+const LIMITED_APIS = {
+  cookies: 'chrome.cookies',
+  webNavigation: 'chrome.webNavigation',
+  contextMenus: 'chrome.contextMenus',
+  notifications: 'chrome.notifications',
+  downloads: 'chrome.downloads',
+  userScripts: 'chrome.userScripts',
+  declarativeContent: 'chrome.declarativeContent',
+  browsingData: 'chrome.browsingData',
+  bookmarks: 'chrome.bookmarks',
+  history: 'chrome.history',
+  sessions: 'chrome.sessions',
+  debugger: 'chrome.debugger',
+  webRequestBlocking: 'MV3 的 webRequestBlocking',
+};
+
+/** Human-readable gaps for the settings list; empty when nothing is missing. */
+function describeCompatibility(manifest) {
+  const permissions = [
+    ...(Array.isArray(manifest.permissions) ? manifest.permissions : []),
+    ...(Array.isArray(manifest.optional_permissions) ? manifest.optional_permissions : []),
+  ].filter((item) => typeof item === 'string');
+  const missing = [];
+  for (const permission of permissions) {
+    const label = LIMITED_APIS[permission];
+    if (label && !missing.includes(label)) missing.push(label);
+  }
+  const notes = [];
+  const version = Number(manifest.manifest_version);
+  if (missing.includes('chrome.userScripts')) {
+    notes.push('依赖 chrome.userScripts 注入用户脚本，当前内核不提供该 API，脚本会被跳过（扩展管理界面仍可打开）');
+  }
+  if (version === 3 && permissions.includes('webRequestBlocking')) {
+    notes.push('Manifest V3 不再允许 webRequestBlocking，请求拦截可能退化为 declarativeNetRequest');
+  }
+  if (permissions.includes('tabs')) {
+    notes.push('chrome.tabs 仅有查询/更新能力，扩展无法自行创建标签页');
+  }
+  if (manifest.background?.service_worker) {
+    notes.push('后台 Service Worker 可以运行，但 chrome.windows 不可用');
+  }
+  return { limited: missing.length > 0, missing, notes };
+}
+
 function readManifest(directory) {
   const manifestPath = path.join(directory, MANIFEST_FILE);
   let raw;
@@ -115,8 +200,10 @@ function readActionIcon(directory, icon) {
 function describeAction(manifest, directory) {
   const action = manifest.action ?? manifest.browser_action ?? manifest.page_action;
   if (!action || typeof action !== 'object') return null;
+  const tables = localeTable(directory, manifest);
   const popup = typeof action.default_popup === 'string' ? action.default_popup.trim() : '';
-  const title = cleanText(action.default_title, 120) || cleanText(manifest.name, 120);
+  const title = cleanText(resolveMessage(action.default_title, tables), 120)
+    || cleanText(resolveMessage(manifest.name, tables), 120);
   return {
     title,
     popup: popup && !popup.includes('..') ? popup.replace(/^\/+/, '') : '',
@@ -124,8 +211,25 @@ function describeAction(manifest, directory) {
   };
 }
 
+/** The page an extension can be opened on: options first, then the popup. */
+function optionsPageOf(manifest) {
+  const candidates = [
+    manifest.options_ui?.page,
+    manifest.options_page,
+    manifest.action?.default_popup,
+    manifest.browser_action?.default_popup,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() && !candidate.includes('..')) {
+      return candidate.trim().replace(/^\/+/, '');
+    }
+  }
+  return '';
+}
+
 /** Flattens a manifest into the fields the settings list renders. */
 function summarizeManifest(manifest, directory = '') {
+  const tables = directory ? localeTable(directory, manifest) : [];
   const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];
   const matches = new Set();
   for (const entry of contentScripts) {
@@ -143,15 +247,17 @@ function summarizeManifest(manifest, directory = '') {
     : [];
   const version = Number(manifest.manifest_version);
   return {
-    name: cleanText(manifest.name, 120),
+    name: cleanText(resolveMessage(manifest.name, tables), 120),
     version: cleanText(manifest.version, 32),
-    description: cleanText(manifest.description, 400),
+    description: cleanText(resolveMessage(manifest.description, tables), 400),
     manifestVersion: version === 2 ? 2 : 3,
     permissions,
     hostPermissions,
     matches: [...matches].slice(0, 12),
     hasAction: Boolean(manifest.action || manifest.browser_action || manifest.page_action),
     hasBackground: Boolean(manifest.background?.service_worker || manifest.background?.scripts),
+    page: optionsPageOf(manifest),
+    compat: describeCompatibility(manifest),
     directory,
   };
 }
@@ -404,6 +510,8 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
       hostPermissions: entry.summary?.hostPermissions ?? [],
       matches: entry.summary?.matches ?? [],
       hasAction: entry.summary?.hasAction ?? false,
+      page: entry.summary?.page ?? '',
+      compat: entry.summary?.compat ?? { limited: false, missing: [], notes: [] },
       toolbar: entry.action && entry.loaded
         ? {
           title: entry.action.title,
@@ -420,6 +528,17 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
 
   function list() {
     return [...entries.values()].map(toPublic).sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  /** The page an extension can be opened on, plus the URL to load it from. */
+  function pageFor(id, page) {
+    const entry = entries.get(id);
+    if (!entry || !entry.loaded) return null;
+    const relative = typeof page === 'string' && page.trim() && !page.includes('..')
+      ? page.trim().replace(/^\/+/, '')
+      : entry.summary?.page;
+    if (!relative) return null;
+    return `chrome-extension://${entry.loaded.id}/${relative}`;
   }
 
   async function loadAll() {
@@ -460,7 +579,10 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
       return { ok: false, error: `扩展体积超过上限（${Math.round(size / 1024 / 1024)} MB > 100 MB）` };
     }
 
-    const id = folderNameFor(parsed.manifest);
+    // The folder name is derived from the visible name, so `__MSG_*__` tokens
+    // are resolved first: an extension should not appear as `msg-extname-…`.
+    const resolvedName = String(resolveMessage(parsed.manifest.name, localeTable(source, parsed.manifest)) || parsed.manifest.name);
+    const id = folderNameFor({ ...parsed.manifest, name: resolvedName });
     const target = path.join(directory, id);
     if (fs.existsSync(target)) {
       return { ok: false, error: '同名同版本的扩展已经安装，请先移除再重新加载' };
@@ -556,6 +678,7 @@ function createExtensionManager({ directory, session, log = () => {}, onChange =
     setEnabled,
     reload,
     remove,
+    pageFor,
     get directory() {
       return directory;
     },
@@ -566,6 +689,7 @@ module.exports = {
   createExtensionManager,
   crxPayload,
   describeAction,
+  describeCompatibility,
   summarizeManifest,
   validateManifest,
   readManifest,

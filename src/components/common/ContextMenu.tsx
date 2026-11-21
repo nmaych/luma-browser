@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useOverlaySurface } from '../../hooks/useOverlaySurface';
+import { useOverlaySurface, isOverlaySurfaceActive } from '../../hooks/useOverlaySurface';
 
 export interface ContextMenuAction {
   id: string;
@@ -40,12 +40,19 @@ export function ContextMenu({ x, y, items, label = '操作菜单', onClose }: Co
   }, [x, y, items.length]);
 
   useEffect(() => {
+    // Opening the menu focuses its first item. While the menu is mirrored
+    // above the page, the mirror view takes focus on click: that blur is not
+    // the user clicking away, and closing here would swallow the click.
+    const handleBlur = () => {
+      if (isOverlaySurfaceActive()) return;
+      onClose();
+    };
     const handleResize = () => onClose();
     const handleKeydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('resize', handleResize);
-    window.addEventListener('blur', handleResize);
+    window.addEventListener('blur', handleBlur);
     window.addEventListener('keydown', handleKeydown);
     // The menu is often opened by right-clicking the native page, which leaves
     // keyboard focus there; pull it back so Escape and arrow keys work.
@@ -54,7 +61,7 @@ export function ContextMenu({ x, y, items, label = '操作菜单', onClose }: Co
     firstItem?.focus({ preventScroll: true });
     return () => {
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('blur', handleResize);
+      window.removeEventListener('blur', handleBlur);
       window.removeEventListener('keydown', handleKeydown);
     };
   }, [onClose]);
@@ -91,6 +98,7 @@ export function ContextMenu({ x, y, items, label = '操作菜单', onClose }: Co
               role="menuitem"
               className={item.danger ? 'is-danger' : ''}
               key={item.id}
+              data-menu-item={item.id}
               disabled={item.disabled}
               onClick={() => {
                 onClose();

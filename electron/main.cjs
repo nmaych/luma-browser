@@ -11,6 +11,8 @@ const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
 const { configureSession } = require('./main/sessionPolicy.cjs');
 const { createExtensionManager } = require('./extensions.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
+const defaultBrowser = require('./main/defaultBrowser.cjs');
+const fileIcons = require('./main/fileIcons.cjs');
 const { translateTexts } = require('./main/translate.cjs');
 const {
   normalizeExternalBounds,
@@ -85,16 +87,57 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     const win = mainWindow ?? BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    const urls = launchUrls(argv);
     if (!win) {
+      queuedLaunchUrls.push(...urls);
       createWindow();
       return;
     }
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
+    openLaunchUrls(urls, win);
   });
+}
+
+/** Links handed to us by the OS when Luma is the default browser. */
+function launchUrls(argv) {
+  const urls = [];
+  for (const argument of Array.isArray(argv) ? argv : []) {
+    if (typeof argument !== 'string') continue;
+    const value = argument.trim();
+    if (/^(https?|file):\/\//i.test(value)) urls.push(value);
+  }
+  return urls;
+}
+
+/**
+ * The renderer owns the tab list, so a URL is a message rather than a
+ * navigation. Anything that arrives before the UI is ready is queued.
+ */
+function openLaunchUrls(urls, win = mainWindow) {
+  if (!Array.isArray(urls) || urls.length === 0) return;
+  const target = win && !win.isDestroyed() ? win : mainWindow;
+  if (!target || target.isDestroyed()) {
+    queuedLaunchUrls.push(...urls);
+    return;
+  }
+  const send = () => {
+    for (const url of urls) target.webContents.send('window:open-url', url);
+  };
+  if (target.webContents.isLoadingMainFrame()) {
+    queuedLaunchUrls.push(...urls);
+    return;
+  }
+  send();
+}
+
+function flushQueuedLaunchUrls() {
+  if (queuedLaunchUrls.length === 0) return;
+  const pending = queuedLaunchUrls.splice(0, queuedLaunchUrls.length);
+  openLaunchUrls(pending);
 }
 
 const DEV_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' ws: http://127.0.0.1:* http://localhost:*; media-src 'self' https: http:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'";
@@ -270,8 +313,14 @@ const blockedCounts = new Map();
 const blockedBroadcastTimers = new Map();
 /** @type {NodeJS.Timeout | null} */
 let persistDownloadsTimer = null;
+/** @type {NodeJS.Timeout | null} */
+let broadcastDownloadsTimer = null;
+/** Last payload written to disk, so progress ticks do not rewrite the file. */
+let lastPersistedDownloads = '';
 /** @type {Map<string, any>} */
 const pendingInitialTabs = new Map();
+/** URLs handed to the app by the OS before the renderer could open them. */
+const queuedLaunchUrls = [];
 /** @type {import('./adblock.cjs').AdblockManager | null} */
 let adblockManager = null;
 /** @type {Map<number, string>} inserted cosmetic CSS key per guest */
@@ -292,6 +341,8 @@ let extensionsDirectory = null;
 /** Floating host window for `chrome.action.default_popup`. */
 let extensionPopupWindow = null;
 let extensionPopupOwner = null;
+/** The single window hosting an extension's own dashboard/options page. */
+let extensionPageWindow = null;
 
 function isFileUrl(url) {
   try {
@@ -822,10 +873,26 @@ function downloadSnapshot() {
 }
 
 function broadcastDownloads() {
+  if (broadcastDownloadsTimer) {
+    clearTimeout(broadcastDownloadsTimer);
+    broadcastDownloadsTimer = null;
+  }
   const snapshot = downloadSnapshot();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('downloads:changed', snapshot);
   }
+}
+
+/**
+ * Coalesces bursts (several downloads finishing together, or a progress tick
+ * per chunk) into one IPC message per frame or so.
+ */
+function scheduleBroadcastDownloads() {
+  if (broadcastDownloadsTimer) return;
+  broadcastDownloadsTimer = setTimeout(() => {
+    broadcastDownloadsTimer = null;
+    broadcastDownloads();
+  }, 120);
 }
 
 function uniqueDownloadPath(directory, filename) {
@@ -897,9 +964,21 @@ function persistDownloadsNow() {
     .map((entry) => entry.record)
     .filter((record) => !record.incognito)
     .sort((left, right) => right.startedAt - left.startedAt)
-    .slice(0, 120);
+    .slice(0, 120)
+    // Live rates and byte offsets are rebuilt on the next tick, so they do not
+    // belong in the store: persisting them would rewrite the file constantly.
+    .map(({ speed, etaSeconds, updatedAt, ...rest }) => rest);
+  let payload;
   try {
-    fs.writeFileSync(downloadsStorePath(), JSON.stringify(records, null, 2), 'utf8');
+    payload = JSON.stringify(records);
+  } catch {
+    return;
+  }
+  // Progress-only updates would otherwise rewrite the same file every second.
+  if (payload === lastPersistedDownloads) return;
+  lastPersistedDownloads = payload;
+  try {
+    fs.writeFileSync(downloadsStorePath(), payload, 'utf8');
   } catch {
     // A read-only profile keeps the list in memory.
   }
@@ -1016,11 +1095,15 @@ function startResumableDownload(entry) {
   entry.pausedRequested = false;
   entry.cancelled = false;
   entry.sample = { bytes: start, time: Date.now() };
+  entry.average = 0;
+  entry.lastBroadcast = 0;
   entry.record = {
     ...record,
     state: 'progressing',
     paused: false,
     speed: 0,
+    etaSeconds: null,
+    updatedAt: Date.now(),
     receivedBytes: start,
     resumable: true,
   };
@@ -1064,9 +1147,18 @@ function startResumableDownload(entry) {
       const received = entry.record.receivedBytes + chunk.length;
       const now = Date.now();
       const elapsed = Math.max(0.001, (now - entry.sample.time) / 1000);
-      const speed = Math.max(0, Math.round((received - entry.sample.bytes) / elapsed));
+      const instant = Math.max(0, (received - entry.sample.bytes) / elapsed);
+      entry.average = entry.average > 0 ? entry.average * 0.62 + instant * 0.38 : instant;
       entry.sample = { bytes: received, time: now };
-      entry.record = { ...entry.record, receivedBytes: received, speed };
+      const speed = Math.round(entry.average);
+      const total = entry.record.totalBytes;
+      entry.record = {
+        ...entry.record,
+        receivedBytes: received,
+        speed,
+        etaSeconds: speed > 0 && total > received ? Math.ceil((total - received) / speed) : null,
+        updatedAt: now,
+      };
       if (!writable && typeof response.pause === 'function') {
         response.pause();
         stream.once('drain', () => {
@@ -1080,7 +1172,7 @@ function startResumableDownload(entry) {
       // Throttle UI updates; a fast transfer would otherwise flood IPC.
       if (now - (entry.lastBroadcast || 0) > 250) {
         entry.lastBroadcast = now;
-        broadcastDownloads();
+        scheduleBroadcastDownloads();
       }
     });
     response.on('end', () => {
@@ -1184,6 +1276,7 @@ function attachDownloadHandling(targetSession, incognito) {
       }
     }
     const id = `download-${Date.now()}-${++downloadCounter}`;
+    const startedAt = Date.now();
     const record = {
       id,
       filename: item.getFilename(),
@@ -1193,36 +1286,71 @@ function attachDownloadHandling(targetSession, incognito) {
       receivedBytes: 0,
       totalBytes: item.getTotalBytes(),
       speed: 0,
-      startedAt: Date.now(),
+      etaSeconds: null,
+      updatedAt: startedAt,
+      startedAt,
       incognito,
       paused: false,
       resumable: item.canResume(),
     };
-    downloads.set(id, { record, item, sample: { bytes: 0, time: Date.now() } });
+    downloads.set(id, {
+      record,
+      item,
+      sample: { bytes: 0, time: startedAt },
+      // Transfer events arrive dozens of times per second on a fast link, so
+      // the UI is fed at a fixed cadence instead of once per chunk.
+      lastBroadcast: 0,
+      lastPersist: startedAt,
+      average: 0,
+    });
 
     const update = () => {
       const entry = downloads.get(id);
       if (!entry) return;
       const state = item.getState();
       const receivedBytes = item.getReceivedBytes();
+      const totalBytes = item.getTotalBytes();
+      const paused = item.isPaused();
       const now = Date.now();
       const elapsed = Math.max(0.001, (now - entry.sample.time) / 1000);
-      const speed = state === 'progressing'
-        ? Math.max(0, Math.round((receivedBytes - entry.sample.bytes) / elapsed))
-        : 0;
+      const delta = receivedBytes - entry.sample.bytes;
+      const instant = state === 'progressing' && !paused ? Math.max(0, delta / elapsed) : 0;
+      // A single interval can be wildly off (one bursty chunk); an exponential
+      // average gives a rate that neither jumps nor lags behind for a minute.
+      if (instant > 0) {
+        entry.average = entry.average > 0 ? entry.average * 0.62 + instant * 0.38 : instant;
+      } else {
+        entry.average = 0;
+      }
       entry.sample = { bytes: receivedBytes, time: now };
+      const speed = Math.round(entry.average);
+      const remaining = totalBytes > receivedBytes ? totalBytes - receivedBytes : 0;
       entry.record = {
         ...entry.record,
         savePath: item.getSavePath() || entry.record.savePath,
         receivedBytes,
-        totalBytes: item.getTotalBytes(),
+        totalBytes,
         speed,
-        paused: item.isPaused(),
+        etaSeconds: speed > 0 && remaining > 0 ? Math.ceil(remaining / speed) : null,
+        updatedAt: now,
+        paused,
         resumable: item.canResume(),
         state: state === 'progressing' ? 'progressing' : state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted',
       };
-      broadcastDownloads();
-      schedulePersistDownloads();
+      // State changes are worth reporting immediately; progress is throttled.
+      const stateChanged = state !== 'progressing' || paused !== (entry.lastPaused ?? false);
+      entry.lastPaused = paused;
+      if (stateChanged || now - entry.lastBroadcast >= 300) {
+        entry.lastBroadcast = now;
+        if (stateChanged) broadcastDownloads();
+        else scheduleBroadcastDownloads();
+      }
+      // Progress ticks only rewrite the store every few seconds; the finished
+      // state is always flushed.
+      if (stateChanged || now - entry.lastPersist >= 4000) {
+        entry.lastPersist = now;
+        schedulePersistDownloads();
+      }
     };
 
     item.on('updated', update);
@@ -1255,6 +1383,9 @@ function openDownloadsWindow() {
     backgroundColor: '#eeeef3',
     title: '下载内容 · Luma',
     autoHideMenuBar: true,
+    // The manager is its own window and used to appear as an empty white
+    // frame while the bundle booted; show it once the first paint is ready.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -1263,6 +1394,9 @@ function openDownloadsWindow() {
     },
   });
   downloadsWindow.setMenuBarVisibility(false);
+  downloadsWindow.once('ready-to-show', () => {
+    if (downloadsWindow && !downloadsWindow.isDestroyed()) downloadsWindow.show();
+  });
   downloadsWindow.on('closed', () => {
     downloadsWindow = null;
   });
@@ -1271,6 +1405,11 @@ function openDownloadsWindow() {
   } else {
     void downloadsWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { downloads: '1' } });
   }
+  // A slow first paint must not leave the window invisible forever.
+  const showTimer = setTimeout(() => {
+    if (downloadsWindow && !downloadsWindow.isDestroyed() && !downloadsWindow.isVisible()) downloadsWindow.show();
+  }, 1500);
+  downloadsWindow.once('closed', () => clearTimeout(showTimer));
   return downloadsWindow;
 }
 
@@ -1515,11 +1654,20 @@ app.on('web-contents-created', (_event, contents) => {
     attachPageFeatures(contents, { native: false });
   });
 
+  // Links the OS launched us with (Luma being the default browser) wait for
+  // the renderer to say it is ready to receive them.
+  queuedLaunchUrls.push(...launchUrls(process.argv));
   createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// The UI reports readiness once its tab store is mounted, so a launch URL is
+// opened as a real tab instead of being dropped on the floor.
+ipcMain.on('window:ui-ready', () => {
+  flushQueuedLaunchUrls();
 });
 
 ipcMain.on('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
@@ -2348,6 +2496,64 @@ ipcMain.handle('updates:prefs', () => updateManager?.getState().prefs ?? { autoD
 ipcMain.handle('updates:set-prefs', (_event, patch) => updateManager?.setPrefs(patch) ?? null);
 // Chrome exposes chrome://version; the settings page shows the same three roots
 // so a user can find the profile, the update cache and the program directory.
+/**
+ * Opens an extension's own page (dashboard, options, popup) in a normal window.
+ *
+ * Extension pages have to keep the `chrome-extension://` origin to reach their
+ * `chrome.*` APIs, so they cannot be rendered as a Luma tab. A dedicated window
+ * is the closest a Chromium embedder can get, and it keeps dashboards such as
+ * Tampermonkey's reachable even when the toolbar popup is limited.
+ */
+async function openExtensionPage(extensionId, page) {
+  if (!extensionManager) return { ok: false, error: '扩展管理器尚未就绪' };
+  const url = extensionManager.pageFor(extensionId, page);
+  if (!url) return { ok: false, error: '这个扩展没有可以打开的页面' };
+  if (extensionPageWindow && !extensionPageWindow.isDestroyed()) {
+    extensionPageWindow.destroy();
+    extensionPageWindow = null;
+  }
+  const entry = extensionManager.list().find((item) => item.id === extensionId);
+  const win = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 520,
+    minHeight: 420,
+    backgroundColor: '#ffffff',
+    title: entry ? `${entry.name} · Luma` : '扩展 · Luma',
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: browserSession,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  extensionPageWindow = win;
+  win.setMenuBarVisibility(false);
+  win.once('closed', () => {
+    if (extensionPageWindow === win) extensionPageWindow = null;
+  });
+  win.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (isSafeHttpUrl(target) && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:open-url', target);
+      mainWindow.show();
+      mainWindow.focus();
+    } else if (target.startsWith('chrome-extension://')) {
+      void win.loadURL(target);
+    }
+    return { action: 'deny' };
+  });
+  // The page must be allowed to be who it is: no navigation away from the
+  // extension origin, or the privilege would be handed to a web page.
+  win.webContents.on('will-navigate', (event, target) => {
+    if (target.startsWith('chrome-extension://')) return;
+    event.preventDefault();
+    if (isSafeHttpUrl(target)) mainWindow?.webContents.send('window:open-url', target);
+  });
+  await win.loadURL(url).catch(() => undefined);
+  return { ok: true, url };
+}
+
 function closeExtensionPopup() {
   if (!extensionPopupWindow) return false;
   const win = extensionPopupWindow;
@@ -2426,6 +2632,11 @@ async function openExtensionPopup(extensionId, anchor) {
   // Extension popups often link to their own pages (options, help). Those open
   // in a normal tab instead of being silently blocked.
   win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('chrome-extension://')) {
+      // An extension page must keep its own origin, so it gets a real window.
+      openExtensionPage(extensionId, url.replace(/^chrome-extension:\/\/[^/]+\//, ''));
+      return { action: 'deny' };
+    }
     if (isSafeHttpUrl(url) && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('window:open-url', url);
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -2537,6 +2748,7 @@ ipcMain.handle('extensions:remove', (_event, id) => (
   extensionManager ? extensionManager.remove(id) : { ok: false, list: [] }
 ));
 ipcMain.handle('extensions:popup', (_event, id, anchor) => openExtensionPopup(id, anchor));
+ipcMain.handle('extensions:open-page', (_event, id, page) => openExtensionPage(id, page));
 ipcMain.handle('extensions:close-popup', () => closeExtensionPopup());
 ipcMain.handle('extensions:open-folder', async () => {
   const target = extensionsDirectory ?? appPaths.extensions;
@@ -2556,6 +2768,9 @@ ipcMain.handle('app:paths', () => ({
   log: appPaths.log,
   isolated: appPaths.overridden,
 }));
+
+ipcMain.handle('default-browser:status', () => defaultBrowser.status());
+ipcMain.handle('default-browser:register', () => defaultBrowser.register());
 
 ipcMain.handle('app:versions', () => ({
   app: app.getVersion(),
@@ -3097,6 +3312,7 @@ ipcMain.handle('downloads:delete-file', async (event, id) => {
   } catch {
     return false;
   }
+  fileIcons.forgetFileIcon(savePath);
   downloads.delete(id);
   broadcastDownloads();
   schedulePersistDownloads();
@@ -3113,6 +3329,15 @@ ipcMain.handle('downloads:show-in-folder', (_event, id) => {
   if (!entry?.record.savePath) return false;
   shell.showItemInFolder(entry.record.savePath);
   return true;
+});
+// The renderer only passes an id, so a page cannot ask us to read arbitrary
+// paths off disk; a download still in flight has no complete file to describe.
+ipcMain.handle('downloads:icon', async (_event, id) => {
+  const entry = typeof id === 'string' ? downloads.get(id) : undefined;
+  const savePath = entry?.record.savePath;
+  if (!savePath || entry.record.state === 'progressing') return null;
+  if (!path.isAbsolute(savePath)) return null;
+  return fileIcons.fileIconFor(savePath);
 });
 ipcMain.handle('downloads:get-directory', () => downloadDirectoryInfo());
 ipcMain.handle('downloads:choose-directory', async (event) => {

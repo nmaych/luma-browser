@@ -22,11 +22,33 @@
 .downloads-list { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0 32px 30px; gap: 9px; overflow-y: auto; }
 .download-item { display: flex; align-items: flex-start; flex: 0 0 auto; padding: 16px 16px 16px 17px; gap: 14px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface); box-shadow: var(--shadow-sm); transition: border 160ms ease, box-shadow 160ms ease; }
 .download-item:hover { border-color: color-mix(in srgb, var(--accent) 20%, var(--border)); box-shadow: 0 8px 22px rgba(45,43,80,.07); }
-.download-item__icon { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border-radius: 12px; color: var(--accent); background: var(--accent-faint); }
-.download-item__icon.is-done { color: #319a73; background: #e9f7f1; }
-:root[data-theme='dark'] .download-item__icon.is-done { background: #23372f; }
-.download-item.is-interrupted .download-item__icon { color: #d2555e; background: #fff0f1; }
-:root[data-theme='dark'] .download-item.is-interrupted .download-item__icon { background: #3d292c; }
+.download-item__icon { position: relative; display: grid; place-items: center; flex: 0 0 44px; height: 44px; border-radius: 13px; color: var(--tone-ink, var(--accent)); background: var(--tone-bg, var(--accent-faint)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-ink, var(--accent)) 12%, transparent); }
+/* The extension label rides in the corner so the list still reads at a glance. */
+.download-item__icon em { position: absolute; right: 3px; bottom: 2px; max-width: 36px; padding: 0 3px; overflow: hidden; border-radius: 4px; color: inherit; background: color-mix(in srgb, var(--tone-ink, var(--accent)) 15%, transparent); font-size: 7px; font-style: normal; font-weight: 720; line-height: 12px; letter-spacing: .02em; text-overflow: ellipsis; }
+/* The file's own icon: shell artwork for apps/installers, the picture itself for images. */
+.download-item__icon-image { width: 100%; height: 100%; border-radius: inherit; object-fit: contain; }
+/* Real artwork replaces the tone colour, so the row reads as "this file" rather than "this type". */
+.download-item__icon.has-image { box-sizing: border-box; padding: 3px; background: var(--surface-soft); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 8%); }
+.download-item__icon.has-thumbnail { padding: 0; }
+.download-item__icon.has-thumbnail .download-item__icon-image { object-fit: cover; }
+:root[data-theme='dark'] .download-item__icon.has-image { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 10%); }
+.download-item__badge { position: absolute; left: -3px; top: -3px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 999px; color: #fff; background: #319a73; box-shadow: 0 0 0 2px var(--surface); }
+.download-item__badge.is-warn { background: #d2555e; }
+:root[data-theme='dark'] .download-item__icon { background: color-mix(in srgb, var(--tone-ink, var(--accent)) 22%, #1b1c24); }
+:root[data-theme='dark'] .download-item__badge { box-shadow: 0 0 0 2px var(--surface); }
+.tone-pdf { --tone-ink: #dd5560; --tone-bg: #fdeef0; }
+.tone-doc { --tone-ink: #3b7ddd; --tone-bg: #eef4fe; }
+.tone-sheet { --tone-ink: #2f9e63; --tone-bg: #ecf8f1; }
+.tone-slide { --tone-ink: #df8035; --tone-bg: #fdf2e8; }
+.tone-image { --tone-ink: #8b5cf6; --tone-bg: #f4effe; }
+.tone-video { --tone-ink: #5b6ef5; --tone-bg: #eef0fe; }
+.tone-audio { --tone-ink: #12a0a8; --tone-bg: #e9f8f8; }
+.tone-archive { --tone-ink: #bf8a1c; --tone-bg: #fbf4e3; }
+.tone-installer { --tone-ink: #64748b; --tone-bg: #f0f2f6; }
+.tone-code { --tone-ink: #0e8fa8; --tone-bg: #e8f6f9; }
+.tone-font { --tone-ink: #a1529f; --tone-bg: #f9eef9; }
+.tone-disk { --tone-ink: #5a7184; --tone-bg: #eef2f5; }
+.tone-other { --tone-ink: var(--accent); --tone-bg: var(--accent-faint); }
 .download-item__body { flex: 1; min-width: 0; }
 .download-item__title { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .download-item__title strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
@@ -39,6 +61,8 @@
 .download-item__meta i { font-style: normal; opacity: .55; }
 .download-item__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .download-item__path { overflow: hidden; margin: 6px 0 0; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.download-item__speed { color: #319a73; font-weight: 600; font-variant-numeric: tabular-nums; }
+.download-item__eta { color: var(--text-soft); font-variant-numeric: tabular-nums; }
 .download-progress { position: relative; height: 5px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: var(--surface-soft); }
 .download-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #9690ff); transition: width 220ms ease; }
 .download-progress span.is-indeterminate { animation: download-indeterminate 1.3s ease-in-out infinite; }

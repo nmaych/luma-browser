@@ -16,6 +16,7 @@ import {
 import type { Bookmark, BookmarkFolder } from '../../types';
 import { ContextMenu, type ContextMenuEntry } from '../common/ContextMenu';
 import { SiteIcon } from '../common/SiteIcon';
+import { useOverlaySurface } from '../../hooks/useOverlaySurface';
 
 interface BookmarksBarProps {
   bookmarks: Bookmark[];
@@ -78,6 +79,8 @@ export function BookmarksBar(props: BookmarksBarProps) {
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(Number.POSITIVE_INFINITY);
   const itemsRef = useRef<HTMLDivElement | null>(null);
+  const folderMenuRef = useRef<HTMLDivElement | null>(null);
+  const overflowMenuRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const merged = useMemo<BarItem[]>(() => {
@@ -98,6 +101,11 @@ export function BookmarksBar(props: BookmarksBarProps) {
   const shownCount = Math.min(visibleCount, merged.length);
   const hiddenItems = merged.slice(shownCount);
   const hasOverflow = hiddenItems.length > 0;
+
+  // Both dropdowns hang over the page area, which is a native view painted
+  // above the DOM. Mirroring them keeps them visible instead of being covered.
+  useOverlaySurface(folderMenuRef, Boolean(folderMenu));
+  useOverlaySurface(overflowMenuRef, Boolean(overflowMenu && hasOverflow));
 
   useLayoutEffect(() => {
     const container = itemsRef.current;
@@ -402,6 +410,7 @@ export function BookmarksBar(props: BookmarksBarProps) {
             className="bookmarks-folder-menu popover"
             role="menu"
             aria-label={`文件夹 ${folderMenu.folder.name}`}
+            ref={folderMenuRef}
             style={{ position: 'fixed', left: folderMenu.x, top: folderMenu.y, width: FOLDER_MENU_WIDTH }}
           >
             <div className="bookmarks-folder-menu__header">
@@ -414,6 +423,7 @@ export function BookmarksBar(props: BookmarksBarProps) {
                   type="button"
                   role="menuitem"
                   key={bookmark.id}
+                  data-menu-item={`folder-open-${bookmark.id}`}
                   onClick={() => { setFolderMenu(null); props.onOpenInNewTab(bookmark.url); }}
                   title={bookmark.url}
                 >
@@ -426,10 +436,10 @@ export function BookmarksBar(props: BookmarksBarProps) {
               )}
             </div>
             <div className="bookmarks-folder-menu__footer">
-              <button type="button" onClick={() => { const folderId = folderMenu.folder.id; setFolderMenu(null); props.onAdd(folderId); }}>
+              <button type="button" data-menu-item="folder-add" onClick={() => { const folderId = folderMenu.folder.id; setFolderMenu(null); props.onAdd(folderId); }}>
                 <Plus size={14} /> 添加书签
               </button>
-              <button type="button" onClick={() => { setFolderMenu(null); props.onManage(); }}>
+              <button type="button" data-menu-item="folder-manage" onClick={() => { setFolderMenu(null); props.onManage(); }}>
                 <FolderOpen size={14} /> 管理文件夹
               </button>
             </div>
@@ -444,6 +454,7 @@ export function BookmarksBar(props: BookmarksBarProps) {
             className="bookmarks-overflow popover"
             role="menu"
             aria-label="更多书签"
+            ref={overflowMenuRef}
             style={{ position: 'fixed', left: overflowMenu.x, top: overflowMenu.y, width: OVERFLOW_MENU_WIDTH }}
           >
             <div className="bookmarks-overflow__header">
@@ -460,6 +471,7 @@ export function BookmarksBar(props: BookmarksBarProps) {
                       key={`overflow-${item.bookmark.id}`}
                       className="bookmarks-overflow__row"
                       title={item.bookmark.url}
+                      data-menu-item={`overflow-open-${item.bookmark.id}`}
                       onClick={() => { setOverflowMenu(null); props.onOpenInNewTab(item.bookmark.url); }}
                     >
                       <SiteIcon url={item.bookmark.url} size="small" favicon={item.bookmark.favicon} />
@@ -478,6 +490,7 @@ export function BookmarksBar(props: BookmarksBarProps) {
                       className="bookmarks-overflow__row"
                       aria-expanded={expanded}
                       title={`文件夹：${folder.name}（${children.length} 个书签）`}
+                      data-menu-item={`overflow-folder-${folder.id}`}
                       onClick={() => setExpandedFolder((current) => (current === folder.id ? null : folder.id))}
                     >
                       {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}

@@ -12,6 +12,34 @@ interface LumaDownloadRecord {
   paused: boolean;
   /** Whether the interrupted transfer can continue from the partial file. */
   resumable?: boolean;
+  /** Smoothed transfer rate in bytes per second; 0 while idle. */
+  speed?: number;
+  /** Seconds left at the current rate, or null when it cannot be estimated. */
+  etaSeconds?: number;
+  /** Timestamp of the last progress update, used to fade stale rates. */
+  updatedAt?: number;
+}
+
+/** The icon a finished download carries, resolved by the main process. */
+interface LumaFileIcon {
+  dataUrl: string;
+  /** `thumbnail` renders the image itself; `shell` is the platform file icon. */
+  kind: 'thumbnail' | 'shell';
+}
+
+/** A click inside a mirrored popover, replayed on the real DOM. */
+interface LumaOverlayClick {
+  steps: number[];
+  itemId: string;
+}
+
+interface LumaDefaultBrowserStatus {
+  supported: boolean;
+  registered: boolean;
+  isDefault: boolean;
+  canRegister: boolean;
+  exePath?: string;
+  reason?: string;
 }
 
 interface LumaPageViewEvent {
@@ -109,6 +137,15 @@ interface LumaExtensionToolbar {
   popup: string | null;
 }
 
+interface LumaExtensionCompat {
+  /** True when the extension asks for an API this Electron build lacks. */
+  limited: boolean;
+  /** Names of the missing APIs, e.g. `chrome.userScripts`. */
+  missing: string[];
+  /** Behavioural caveats worth explaining next to the extension. */
+  notes: string[];
+}
+
 interface LumaExtension {
   id: string;
   name: string;
@@ -120,6 +157,9 @@ interface LumaExtension {
   matches: string[];
   hasAction: boolean;
   hasBackground: boolean;
+  /** Relative path of the page (options/dashboard) the extension can open on. */
+  page: string;
+  compat: LumaExtensionCompat;
   enabled: boolean;
   loaded: boolean;
   error: string | null;
@@ -259,6 +299,14 @@ interface LumaDesktopApi {
   getUpdatePrefs: () => Promise<LumaUpdatePrefs | null>;
   setUpdatePrefs: (patch: Partial<LumaUpdatePrefs>) => Promise<LumaUpdateState | null>;
   getAppPaths: () => Promise<LumaAppPaths | null>;
+  getDefaultBrowserStatus: () => Promise<LumaDefaultBrowserStatus>;
+  registerAsDefaultBrowser: () => Promise<{
+    ok: boolean;
+    error?: string;
+    openedSettings?: boolean;
+    status?: LumaDefaultBrowserStatus;
+  }>;
+  uiReady: () => void;
   listExtensions: () => Promise<LumaExtension[]>;
   installExtension: (sourcePath?: string) => Promise<LumaExtensionResult>;
   installExtensionFromCrx: (sourcePath?: string) => Promise<LumaExtensionResult>;
@@ -270,6 +318,7 @@ interface LumaDesktopApi {
     id: string,
     anchor: { x: number; y: number; width: number; height: number },
   ) => Promise<{ ok: boolean; error?: string; closed?: boolean; opened?: boolean }>;
+  openExtensionPage: (id: string, page?: string) => Promise<{ ok: boolean; error?: string; url?: string }>;
   closeExtensionPopup: () => Promise<boolean>;
   onOpenUrl: (callback: (url: string) => void) => () => void;
   togglePictureInPicture: (
@@ -368,7 +417,7 @@ interface LumaDesktopApi {
       theme?: string;
     }) => void;
     hide: (id?: string) => void;
-    onClick: (callback: (steps: number[]) => void) => () => void;
+    onClick: (callback: (action: LumaOverlayClick) => void) => () => void;
     onOutside: (callback: () => void) => () => void;
   };
   onPageEvent: (callback: (event: LumaPageViewEvent) => void) => () => void;
@@ -387,6 +436,7 @@ interface LumaDesktopApi {
   clearDownloads: () => Promise<boolean>;
   openDownload: (id: string) => Promise<boolean>;
   showDownloadInFolder: (id: string) => Promise<boolean>;
+  getDownloadIcon: (id: string) => Promise<LumaFileIcon | null>;
   getDownloadDirectory: () => Promise<LumaDownloadDirectoryInfo>;
   chooseDownloadDirectory: () => Promise<LumaDownloadDirectoryInfo>;
   resetDownloadDirectory: () => Promise<LumaDownloadDirectoryInfo>;

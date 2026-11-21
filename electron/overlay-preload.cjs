@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('lumaOverlay', {
   onRender: (listener) => {
     ipcRenderer.on('overlay:render', (_event, payload) => listener(payload));
   },
-  onClick: (steps) => ipcRenderer.send('overlay:click', steps),
+  onClick: (action) => ipcRenderer.send('overlay:click', action),
   onKey: (key) => ipcRenderer.send('overlay:key', key),
   onDismiss: () => ipcRenderer.send('overlay:dismiss'),
 });

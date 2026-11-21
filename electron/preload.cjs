@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   removeExtension: (id) => ipcRenderer.invoke('extensions:remove', id),
   openExtensionsFolder: () => ipcRenderer.invoke('extensions:open-folder'),
   openExtensionPopup: (id, anchor) => ipcRenderer.invoke('extensions:popup', id, anchor),
+  openExtensionPage: (id, page) => ipcRenderer.invoke('extensions:open-page', id, page),
   togglePictureInPicture: (tabId, incognito) => ipcRenderer.invoke('page:picture-in-picture', tabId, incognito),
   onOpenUrl: (callback) => {
     const listener = (_event, url) => callback(url);
@@ -69,6 +70,8 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   },
   openIncognito: () => ipcRenderer.send('window:open-incognito'),
   openDownloads: () => ipcRenderer.send('window:open-downloads'),
+  getDefaultBrowserStatus: () => ipcRenderer.invoke('default-browser:status'),
+  registerAsDefaultBrowser: () => ipcRenderer.invoke('default-browser:register'),
   tearOffTab: (tab, point) => ipcRenderer.invoke('window:tear-off-tab', tab, point),
   splitTabs: (tabs, activeId, bounds) => ipcRenderer.invoke('window:split-tabs', { tabs, activeId, bounds }),
   beginTabDrag: (payload) => ipcRenderer.invoke('window:begin-tab-drag', payload),
@@ -111,7 +114,9 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
     show: (payload) => ipcRenderer.send('overlay:show', payload),
     hide: (id) => ipcRenderer.send('overlay:hide', id),
     onClick: (callback) => {
-      const listener = (_event, steps) => callback(Array.isArray(steps) ? steps : []);
+      // The payload is either the legacy element path or { steps, itemId };
+      // both are handed through untouched so the renderer can pick.
+      const listener = (_event, action) => callback(action ?? { steps: [], itemId: '' });
       ipcRenderer.on('overlay:click', listener);
       return () => ipcRenderer.removeListener('overlay:click', listener);
     },
@@ -138,6 +143,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   clearDownloads: () => ipcRenderer.invoke('downloads:clear'),
   openDownload: (id) => ipcRenderer.invoke('downloads:open', id),
   showDownloadInFolder: (id) => ipcRenderer.invoke('downloads:show-in-folder', id),
+  getDownloadIcon: (id) => ipcRenderer.invoke('downloads:icon', id),
   getDownloadDirectory: () => ipcRenderer.invoke('downloads:get-directory'),
   chooseDownloadDirectory: () => ipcRenderer.invoke('downloads:choose-directory'),
   resetDownloadDirectory: () => ipcRenderer.invoke('downloads:reset-directory'),
@@ -145,6 +151,8 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   importBookmarks: () => ipcRenderer.invoke('bookmarks:import-file'),
   exportBookmarks: (content, suggestedName) => ipcRenderer.invoke('bookmarks:export-file', content, suggestedName),
   minimize: () => ipcRenderer.send('window:minimize'),
+  /** Tells main the tab store is mounted, so queued launch URLs can open. */
+  uiReady: () => ipcRenderer.send('window:ui-ready'),
   focusUi: () => ipcRenderer.send('window:focus-ui'),
   toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
   close: () => ipcRenderer.send('window:close'),

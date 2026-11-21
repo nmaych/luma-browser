@@ -74,16 +74,49 @@ html, body, #luma-surface-root, :root { background: transparent !important; }
   // Icon clicks land on <svg>/<path>, which carry no handler of their own;
   // resolve the nearest interactive ancestor inside the mirrored popover.
   const INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], [role="menuitem"], [role="option"]';
-  document.addEventListener('click', (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target || target === document.body || target === root) {
+  // Resolves a mirrored element to something the real renderer can act on.
+  // The data-menu-item id is authoritative when the popover marks its rows: the
+  // mirror is a snapshot, so an index path can point at a different row once the
+  // list re-renders. The path stays as the fallback for popovers without ids.
+  const describe = (target) => {
+    if (!target || target === document.body || target === root) return null;
+    const hit = target.closest(INTERACTIVE);
+    const clickTarget = hit && root.contains(hit) ? hit : target;
+    if (!root.contains(clickTarget)) return null;
+    const steps = pathOf(clickTarget);
+    const owner = clickTarget.closest('[data-menu-item]');
+    const itemId = owner && root.contains(owner) ? owner.getAttribute('data-menu-item') : '';
+    if ((!steps || steps.length === 0) && !itemId) return null;
+    return { steps: steps || [], itemId: itemId || '' };
+  };
+  let suppressClick = false;
+  // Acting on pointerdown matters: the popover routinely closes as soon as the
+  // mirror view takes focus, and the click event would then never be delivered.
+  document.addEventListener('pointerdown', (event) => {
+    suppressClick = false;
+    if (event.button !== 0) return;
+    const action = describe(event.target instanceof Element ? event.target : null);
+    if (!action) {
       window.lumaOverlay.onDismiss();
       return;
     }
-    const hit = target.closest(INTERACTIVE);
-    const clickTarget = hit && root.contains(hit) ? hit : target;
-    const steps = pathOf(clickTarget);
-    if (steps && steps.length > 0) window.lumaOverlay.onClick(steps);
+    // The matching click belongs to this gesture; running it twice would
+    // toggle menus or open a page twice.
+    suppressClick = true;
+    window.lumaOverlay.onClick(action);
+  }, true);
+  document.addEventListener('click', (event) => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    const action = describe(target);
+    if (!action) {
+      window.lumaOverlay.onDismiss();
+      return;
+    }
+    window.lumaOverlay.onClick(action);
   }, true);
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -232,10 +265,17 @@ function wireIpc(ipcMain, BrowserWindow) {
   });
   // The click path comes from the mirrored DOM; running it in the real
   // renderer keeps every React handler (and its state) authoritative.
-  ipcMain.on('overlay:click', (event, steps) => {
+  ipcMain.on('overlay:click', (event, payload) => {
     const win = windowOf(event.sender);
-    if (!win || !Array.isArray(steps)) return;
-    send(win, 'overlay:click', steps.map(Number));
+    if (!win) return;
+    const action = Array.isArray(payload)
+      ? { steps: payload.map(Number), itemId: '' }
+      : {
+        steps: Array.isArray(payload?.steps) ? payload.steps.map(Number) : [],
+        itemId: typeof payload?.itemId === 'string' ? payload.itemId : '',
+      };
+    if (action.steps.length === 0 && !action.itemId) return;
+    send(win, 'overlay:click', action);
     win.webContents.focus();
   });
   ipcMain.on('overlay:key', (event, key) => {

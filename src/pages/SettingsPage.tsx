@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
+  AlertTriangle,
   Bell,
   Bookmark,
   Camera,
@@ -7,6 +8,7 @@ import {
   Clipboard,
   Clock3,
   CloudOff,
+  Compass,
   Cookie,
   Database,
   Download,
@@ -38,6 +40,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  SquareArrowOutUpRight,
   Sun,
   Timer,
   Trash2,
@@ -306,6 +309,9 @@ export function SettingsPage({
   const [extensions, setExtensions] = useState<LumaExtension[]>([]);
   const [extensionBusy, setExtensionBusy] = useState<string | null>(null);
   const [extensionError, setExtensionError] = useState('');
+  const [defaultBrowser, setDefaultBrowser] = useState<LumaDefaultBrowserStatus | null>(null);
+  const [defaultBrowserBusy, setDefaultBrowserBusy] = useState(false);
+  const [defaultBrowserMessage, setDefaultBrowserMessage] = useState('');
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const engines = getAllSearchEngines(preferences.customSearchEngines);
   const currentEngine = engines.find((engine) => engine.id === preferences.searchEngine) ?? engines[0];
@@ -466,6 +472,36 @@ export function SettingsPage({
     if (activeSection !== 'extensions') return;
     void refreshExtensions();
   }, [activeSection]);
+
+  // Windows only lets an app register itself; the user still confirms in
+  // Settings, so the card links there and reports the real association state.
+  useEffect(() => {
+    if (!desktop?.getDefaultBrowserStatus) return undefined;
+    let active = true;
+    void desktop.getDefaultBrowserStatus().then((status) => {
+      if (active) setDefaultBrowser(status);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [desktop]);
+
+  const makeDefaultBrowser = async () => {
+    if (!desktop?.registerAsDefaultBrowser) return;
+    setDefaultBrowserBusy(true);
+    setDefaultBrowserMessage('');
+    try {
+      const result = await desktop.registerAsDefaultBrowser();
+      if (result?.status) setDefaultBrowser(result.status);
+      if (!result?.ok) setDefaultBrowserMessage(result?.error ?? '设置默认浏览器失败');
+      else if (result.openedSettings) setDefaultBrowserMessage('已在系统设置中打开「默认应用」，请选择 Luma Browser 确认。');
+      else setDefaultBrowserMessage('已注册为默认浏览器候选，请在系统设置中确认。');
+    } catch {
+      setDefaultBrowserMessage('设置默认浏览器失败');
+    } finally {
+      setDefaultBrowserBusy(false);
+    }
+  };
 
   const installExtension = async () => {
     if (!desktop?.installExtension) return;
@@ -871,7 +907,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.19.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.20.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -899,6 +935,39 @@ export function SettingsPage({
                       );
                     })}
                   </div>
+                </div>
+
+                <div className="settings-card">
+                  <div className="settings-card__title"><Compass size={18} /><div><h3>默认浏览器</h3><p>让系统把网页链接交给 Luma 打开。</p></div></div>
+                  <div className="setting-row">
+                    <div>
+                      <strong>{defaultBrowser?.isDefault ? 'Luma 已是默认浏览器' : '将 Luma 设为默认浏览器'}</strong>
+                      <p>
+                        {defaultBrowser?.isDefault
+                          ? '在系统设置里点击其他链接时，将直接使用 Luma 打开。'
+                          : defaultBrowser?.supported === false
+                            ? defaultBrowser.reason || '当前系统需要在系统设置中手动选择。'
+                            : '注册后 Windows 会打开「默认应用」页面，选择 Luma Browser 即可完成。'}
+                      </p>
+                    </div>
+                    {defaultBrowser?.isDefault ? (
+                      <span className="default-browser-badge"><Check size={14} />默认</span>
+                    ) : (
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={defaultBrowserBusy || defaultBrowser?.canRegister === false}
+                        title={defaultBrowser?.canRegister === false ? defaultBrowser.reason : undefined}
+                        onClick={() => void makeDefaultBrowser()}
+                      >
+                        <Compass size={15} />{defaultBrowserBusy ? '正在注册…' : '设为默认浏览器'}
+                      </button>
+                    )}
+                  </div>
+                  {defaultBrowserMessage && <p className="setting-hint" role="status">{defaultBrowserMessage}</p>}
+                  {defaultBrowser?.canRegister === false && defaultBrowser.reason && (
+                    <p className="setting-hint is-muted">{defaultBrowser.reason}</p>
+                  )}
                 </div>
 
                 <div className="settings-card">
@@ -1331,8 +1400,30 @@ export function SettingsPage({
                                 {!extension.loaded && extension.enabled && <em className="is-warning">未加载</em>}
                               </div>
                               {extension.error && <p className="form-error" role="alert">{extension.error}</p>}
-                            </div>
+                              {extension.loaded && extension.compat?.limited && (
+                                <p className="extension-row__limit">
+                                  <AlertTriangle size={12} />
+                                  <span>
+                                    内核缺少 {extension.compat.missing.slice(0, 4).join('、')}
+                                    {extension.compat.missing.length > 4 ? ` 等 ${extension.compat.missing.length} 项` : ''}，
+                                    该扩展可能加载成功但部分功能不会生效。
+                                  </span>
+                                </p>
+                              )}
+                              {extension.loaded && extension.compat?.notes?.length > 0 && (
+                                <p className="extension-row__note">{extension.compat.notes[0]}</p>
+                              )}                            </div>
                             <div className="extension-row__actions">
+                              {extension.page && extension.loaded && (
+                                <button
+                                  className="secondary-button secondary-button--compact"
+                                  type="button"
+                                  onClick={() => void desktop?.openExtensionPage?.(extension.id, extension.page)}
+                                  title="在一个独立窗口中打开扩展的选项/仪表盘页面"
+                                >
+                                  <SquareArrowOutUpRight size={13} /> 打开页面
+                                </button>
+                              )}
                               <label className="switch">
                                 <input
                                   aria-label={`启用 ${extension.name}`}
@@ -1612,7 +1703,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.19.0'}</span>
+                    <span>版本 {appVersions?.app ?? '1.20.0'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>

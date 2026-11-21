@@ -4,7 +4,6 @@ import {
   ArrowDownToLine,
   CheckCircle2,
   EyeOff,
-  FileDown,
   FileX2,
   FolderOpen,
   Pause,
@@ -12,6 +11,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { fileTypeOf } from '../utils/fileType';
+import { useFileIcon } from '../hooks/useFileIcon';
 
 type DownloadFilter = 'all' | 'active' | 'finished';
 
@@ -25,6 +26,19 @@ function formatBytes(bytes: number): string {
 function formatSpeed(bytesPerSecond: number): string {
   if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '';
   return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+/** 1 分 05 秒 / 12 秒 / 1 小时 3 分 */
+function formatEta(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  const total = Math.round(seconds);
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  const restSeconds = total % 60;
+  if (minutes < 60) return restSeconds > 0 ? `${minutes} 分 ${restSeconds} 秒` : `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes > 0 ? `${hours} 小时 ${restMinutes} 分` : `${hours} 小时`;
 }
 
 function formatDate(timestamp: number): string {
@@ -161,15 +175,13 @@ export function DownloadsPage() {
           const percent = item.totalBytes > 0
             ? Math.min(100, Math.round((item.receivedBytes / item.totalBytes) * 100))
             : 0;
+          const downloading = item.state === 'progressing' && !item.paused;
+          const eta = downloading && item.totalBytes > 0 && item.speed
+            ? (item.totalBytes - item.receivedBytes) / item.speed
+            : 0;
           return (
             <article className={`download-item is-${item.state}`} key={item.id}>
-              <span className={`download-item__icon ${item.state === 'completed' ? 'is-done' : ''}`}>
-                {item.state === 'completed'
-                  ? <CheckCircle2 size={20} />
-                  : item.state === 'interrupted'
-                    ? <AlertTriangle size={20} />
-                    : <FileDown size={20} />}
-              </span>
+              <DownloadIcon item={item} />
               <div className="download-item__body">
                 <div className="download-item__title">
                   <strong title={item.filename}>{item.filename}</strong>
@@ -186,10 +198,16 @@ export function DownloadsPage() {
                       ? formatBytes(item.receivedBytes || item.totalBytes)
                       : `${formatBytes(item.receivedBytes)} / ${item.totalBytes > 0 ? formatBytes(item.totalBytes) : '未知大小'}`}
                   </span>
-                  {item.state === 'progressing' && !item.paused && item.speed > 0 && (
+                  {downloading && item.speed > 0 && (
                     <>
                       <i>·</i>
                       <span className="download-item__speed">{formatSpeed(item.speed)}</span>
+                    </>
+                  )}
+                  {downloading && eta > 0 && (
+                    <>
+                      <i>·</i>
+                      <span className="download-item__eta">剩余 {formatEta(eta)}</span>
                     </>
                   )}
                 </div>
@@ -275,6 +293,40 @@ export function DownloadsPage() {
         })}
       </main>
     </div>
+  );
+}
+
+/**
+ * Shows the icon the file itself carries once the file is on disk, so two
+ * installers no longer look alike; falls back to the extension icon while the
+ * transfer is still running or when the platform has nothing to offer.
+ */
+function DownloadIcon({ item }: { item: LumaDownloadRecord }) {
+  const type = fileTypeOf(item.filename);
+  const TypeIcon = type.Icon;
+  // Only a finished file can be inspected; a partial one would answer for the
+  // wrong content.
+  const settled = item.state !== 'progressing' && Boolean(item.savePath);
+  const icon = useFileIcon(item.id, settled);
+  const thumbnail = icon?.kind === 'thumbnail';
+  const className = [
+    'download-item__icon',
+    `tone-${type.tone}`,
+    item.state === 'completed' ? 'is-done' : '',
+    icon ? 'has-image' : '',
+    thumbnail ? 'has-thumbnail' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <span className={className} title={type.label ? `${type.label} 文件` : '文件'} aria-hidden="true">
+      {icon
+        ? <img className="download-item__icon-image" src={icon.dataUrl} alt="" draggable={false} />
+        : <TypeIcon size={20} />}
+      {/* The extension label only carries information when the real artwork is missing. */}
+      {type.label && !icon && <em>{type.label}</em>}
+      {item.state === 'completed' && <b className="download-item__badge"><CheckCircle2 size={11} /></b>}
+      {item.state === 'interrupted' && <b className="download-item__badge is-warn"><AlertTriangle size={11} /></b>}
+    </span>
   );
 }
 

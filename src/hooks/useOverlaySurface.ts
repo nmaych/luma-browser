@@ -116,13 +116,26 @@ export function useOverlaySurface(rootRef: RefObject<HTMLElement | null>, active
   useEffect(() => {
     const api = window.lumaDesktop?.overlay;
     if (!api) return undefined;
-    return api.onClick((steps) => {
-      let node: Element | null = rootRef.current;
-      for (const index of steps) {
-        node = node?.children[index] ?? null;
-        if (!node) return;
+    return api.onClick((action) => {
+      const root = rootRef.current;
+      if (!root) return;
+      const payload = Array.isArray(action)
+        ? { steps: action, itemId: '' }
+        : (action ?? { steps: [], itemId: '' });
+      // A mirrored row carries the action id it was rendered for, which stays
+      // correct even when the real list re-rendered after the snapshot.
+      let node: Element | null = null;
+      if (payload.itemId) {
+        node = root.querySelector(`[data-menu-item="${payload.itemId.replace(/["\\]/g, '\\$&')}"]`);
       }
-      if (node instanceof HTMLElement) node.click();
+      if (!node) {
+        node = root;
+        for (const index of payload.steps) {
+          node = node?.children[index] ?? null;
+          if (!node) return;
+        }
+      }
+      if (node instanceof HTMLElement && node !== root) node.click();
     });
   }, [rootRef]);
 }

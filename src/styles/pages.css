@@ -638,6 +638,16 @@
 .extension-row__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .extension-row__meta em { padding: 2px 7px; border: 1px solid var(--border); border-radius: 20px; color: var(--text-muted); background: var(--surface); font-size: 9px; font-style: normal; }
 .extension-row__meta em.is-warning { border-color: var(--accent-soft); color: var(--text); background: var(--accent-faint); }
+/* Electron 内核缺少的 API 会让扩展"加载成功但不工作"，所以单独说明原因。 */
+.extension-row__limit { display: flex; align-items: flex-start; margin-top: 2px; gap: 5px; color: #b4762a; font-size: 10px; line-height: 1.6; }
+.extension-row__limit svg { flex: 0 0 auto; margin-top: 2px; }
+:root[data-theme='dark'] .extension-row__limit { color: #e2b071; }
+.extension-row__note { margin-top: 2px; color: var(--text-muted); font-size: 10px; line-height: 1.6; }
+.secondary-button--compact { height: 28px; padding: 0 9px; gap: 5px; font-size: 11px; }
+.default-browser-badge { display: inline-flex; align-items: center; flex: 0 0 auto; height: 28px; padding: 0 10px; gap: 5px; border-radius: 999px; color: #319a73; background: #e9f7f1; font-size: 11px; font-weight: 620; }
+:root[data-theme='dark'] .default-browser-badge { color: #7fd7b0; background: #23372f; }
+.setting-hint { margin: 8px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.6; }
+.setting-hint.is-muted { color: var(--text-muted); font-size: 10px; }
 .extension-row__actions { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; }
 .extension-empty { margin-top: 12px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; color: var(--text-muted); font-size: 11px; line-height: 1.8; }
 .extension-empty code { padding: 1px 4px; border-radius: 4px; background: var(--surface-soft); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }

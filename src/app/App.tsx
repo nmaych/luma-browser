@@ -281,6 +281,12 @@ export function App() {
     });
   }, [desktop, browser.newTab]);
 
+  // Links the OS launched Luma with (default browser) are held by the main
+  // process until the tab store exists.
+  useEffect(() => {
+    desktop?.uiReady?.();
+  }, [desktop]);
+
   // Popovers are mirrored above the page only while a native page covers the UI.
   useEffect(() => {
     setNativePageVisible(showDesktopWeb);
