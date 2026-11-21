@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowLeft, ArrowRight, BookOpen, Camera, Clock3, Download, History, Home, KeyRound, Languages, LockKeyhole, Newspaper, RotateCw, Search, Settings2, ShieldCheck, ShieldOff, Star, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, Camera, Clock3, Download, History, Home, KeyRound, Languages, LockKeyhole, Newspaper, RotateCw, Search, Settings2, ShieldCheck, ShieldOff, Star, TriangleAlert, X } from 'lucide-react';
 import type { BrowserTab, CustomSearchEngine, HistoryItem, SearchEngine, TabEntry } from '../../types';
-import { displayUrl, getHost, getInternalPage, isExternalUrl } from '../../utils/url';
+import { displayUrl, getHost, getInternalPage, isExternalUrl, parseBrowserInput } from '../../utils/url';
+import { getSearchEngine } from '../../data/searchEngines';
 import { formatHistoryDate, formatTime } from '../../utils/date';
 import { IconButton } from '../common/IconButton';
 import { SiteIcon } from '../common/SiteIcon';
@@ -20,6 +21,17 @@ const TRANSLATION_TARGETS = [
   { value: 'es', label: 'Español' },
   { value: 'ru', label: 'Русский' },
 ];
+
+/** One row of the address dropdown: what Enter would do, or a place already visited. */
+interface AddressSuggestion {
+  /** Stable identity for the overlay mirror, which replays clicks by this id. */
+  id: string;
+  url: string;
+  title: string;
+  isSearch: boolean;
+  hint: string;
+  favicon?: string;
+}
 
 interface NavigationBarProps {
   tab: BrowserTab;
@@ -98,16 +110,48 @@ export function NavigationBar(props: NavigationBarProps) {
 
   // The page is a native view above the HTML layer, so any popover has to make
   // the page step aside while it is open.
-  const suggestions = useMemo(() => {
-    const keyword = address.trim().toLowerCase();
-    if (!props.showSuggestions || !keyword) return [];
-    const seen = new Set<string>();
-    return (props.recentPages ?? []).filter((item) => {
-      if (!isExternalUrl(item.url) || seen.has(item.url)) return false;
+  const draft = address.trim();
+  const draftTarget = useMemo(
+    () => (draft ? parseBrowserInput(draft, props.searchEngine, props.customSearchEngines) : null),
+    [draft, props.searchEngine, props.customSearchEngines],
+  );
+  const engineName = useMemo(
+    () => getSearchEngine(props.searchEngine, props.customSearchEngines ?? []).name,
+    [props.searchEngine, props.customSearchEngines],
+  );
+  // The first row states what Enter will do, so typing "a" no longer looks like
+  // a dead end; matching history follows it.
+  const suggestions = useMemo<AddressSuggestion[]>(() => {
+    if (!draft) return [];
+    const rows: AddressSuggestion[] = [];
+    if (draftTarget?.ok) {
+      rows.push({
+        id: 'draft',
+        url: draftTarget.url,
+        title: draftTarget.isSearch ? draft : draftTarget.title,
+        isSearch: Boolean(draftTarget.isSearch),
+        hint: draftTarget.isSearch ? `使用 ${engineName}` : '回车打开',
+      });
+    }
+    if (!props.showSuggestions) return rows;
+    const keyword = draft.toLowerCase();
+    const seen = new Set<string>(rows.map((row) => row.url));
+    for (const item of props.recentPages ?? []) {
+      if (rows.length > 6) break;
+      if (!isExternalUrl(item.url) || seen.has(item.url)) continue;
+      if (!`${item.title} ${item.url}`.toLowerCase().includes(keyword)) continue;
       seen.add(item.url);
-      return `${item.title} ${item.url}`.toLowerCase().includes(keyword);
-    }).slice(0, 6);
-  }, [address, props.recentPages, props.showSuggestions]);
+      rows.push({
+        id: `history:${item.url}`,
+        url: item.url,
+        title: item.title,
+        isSearch: false,
+        hint: displayUrl(item.url),
+        favicon: item.favicon,
+      });
+    }
+    return rows;
+  }, [draft, draftTarget, engineName, props.recentPages, props.showSuggestions]);
   const suggestionsOpen = isFocused && suggestions.length > 0;
 
   useEffect(() => {
@@ -266,15 +310,33 @@ export function NavigationBar(props: NavigationBarProps) {
         </div>
 
         <form className={`address-bar ${isFocused ? 'is-focused' : ''}`} onSubmit={submit} role="search">
-          <span className="address-bar__security" aria-hidden="true">
-            {page || !props.entry.url.startsWith('https:') ? <Search size={17} /> : <LockKeyhole size={15} />}
-          </span>
+          {isExternal && !(isFocused && draftTarget?.isSearch) ? (
+            <span
+              className="address-bar__security address-bar__security--site"
+              title={props.entry.url.startsWith('https:') ? '连接安全' : '不安全连接（未加密）'}
+            >
+              <SiteIcon url={props.entry.url} favicon={props.tab.favicon} size="small" />
+              <span className={`address-bar__lock ${props.entry.url.startsWith('https:') ? 'is-secure' : 'is-insecure'}`} aria-hidden="true">
+                {props.entry.url.startsWith('https:') ? <LockKeyhole size={9} /> : <TriangleAlert size={9} />}
+              </span>
+            </span>
+          ) : (
+            <span className="address-bar__security" aria-hidden="true">
+              <Search size={isFocused ? 15 : 17} />
+            </span>
+          )}
           <input
             id="browser-address"
             aria-label="地址和搜索栏"
             value={address}
             onChange={(event) => setAddress(event.target.value)}
-            onFocus={(event) => { setIsFocused(true); event.target.select(); }}
+            onFocus={(event) => {
+              setIsFocused(true);
+              // Editing needs the scheme, and it is also the only way to notice
+              // that the page is plain http.
+              setAddress(isExternal ? props.entry.url : displayUrl(props.entry.url));
+              event.target.select();
+            }}
             onBlur={(event) => {
               // A focus move into the mirrored popover reports no related
               // target; the mirror itself dismisses the dropdown, so keep it
@@ -282,6 +344,7 @@ export function NavigationBar(props: NavigationBarProps) {
               if (!event.relatedTarget && isOverlaySurfaceActive()) return;
               setIsFocused(false);
               setActiveSuggestion(-1);
+              setAddress(displayUrl(props.entry.url));
             }}
             onContextMenu={openInputMenu}
             onKeyDown={(event) => {
@@ -289,6 +352,16 @@ export function NavigationBar(props: NavigationBarProps) {
                 setActiveSuggestion(-1);
                 setAddress(displayUrl(props.entry.url));
                 setIsFocused(false);
+                event.currentTarget.blur();
+              } else if (event.key === 'Enter' && event.altKey) {
+                // Alt+Enter opens the same target in a new tab, like Chrome.
+                event.preventDefault();
+                const target = suggestionsOpen && activeSuggestion >= 0
+                  ? suggestions[activeSuggestion].url
+                  : draftTarget?.ok ? draftTarget.url : '';
+                if (target) props.onOpenInNewTab(target);
+                setIsFocused(false);
+                setActiveSuggestion(-1);
                 event.currentTarget.blur();
               } else if (suggestionsOpen && event.key === 'ArrowDown') {
                 event.preventDefault();
@@ -328,18 +401,21 @@ export function NavigationBar(props: NavigationBarProps) {
                   type="button"
                   role="option"
                   id={`address-suggestion-${index}`}
+                  data-menu-item={`address-${item.id}`}
                   aria-selected={index === activeSuggestion}
-                  key={`${item.url}-${index}`}
+                  key={item.id}
                   onMouseDown={(event) => event.preventDefault()}
                   onMouseEnter={() => setActiveSuggestion(index)}
                   onClick={() => go(item.url)}
                 >
-                  <SiteIcon url={item.url} size="small" favicon={item.favicon} />
+                  {item.isSearch
+                    ? <span className="address-suggestions__lead"><Search size={14} /></span>
+                    : <SiteIcon url={item.url} size="small" favicon={item.favicon} />}
                   <span className="address-suggestions__text">
-                    <strong>{item.title}</strong>
-                    <small>{displayUrl(item.url)}</small>
+                    <strong>{item.isSearch ? `搜索“${item.title}”` : item.title}</strong>
+                    <small>{item.hint}</small>
                   </span>
-                  <Clock3 size={13} />
+                  {item.isSearch ? <span className="address-suggestions__hint">回车</span> : <Clock3 size={13} />}
                 </button>
               ))}
             </div>

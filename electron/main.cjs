@@ -2523,7 +2523,10 @@ async function openExtensionPage(extensionId, page) {
     autoHideMenuBar: true,
     webPreferences: {
       session: browserSession,
-      contextIsolation: true,
+      // The shim has to patch the page's own `chrome` object, which only works
+      // without isolation; node stays off and the page keeps its own origin.
+      preload: path.join(__dirname, 'extension-preload.cjs'),
+      contextIsolation: false,
       nodeIntegration: false,
       sandbox: true,
     },
@@ -2619,7 +2622,10 @@ async function openExtensionPopup(extensionId, anchor) {
     title: entry.name,
     webPreferences: {
       session: browserSession,
-      contextIsolation: true,
+      // Same shim as the dashboard: a popup button that wants a tab can ask for
+      // one instead of throwing.
+      preload: path.join(__dirname, 'extension-preload.cjs'),
+      contextIsolation: false,
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
@@ -2749,6 +2755,31 @@ ipcMain.handle('extensions:remove', (_event, id) => (
 ));
 ipcMain.handle('extensions:popup', (_event, id, anchor) => openExtensionPopup(id, anchor));
 ipcMain.handle('extensions:open-page', (_event, id, page) => openExtensionPage(id, page));
+// `chrome.tabs.create` / `chrome.windows.create` from an extension page. Only an
+// extension frame may call it, and only http(s) or its own extension pages may
+// be opened, so a compromised page cannot steer the browser elsewhere.
+ipcMain.handle('extensions:open-url', async (event, payload) => {
+  const url = typeof payload?.url === 'string' ? payload.url.trim() : '';
+  if (!url || url.length > 8192) return { ok: false, error: '地址无效' };
+  const senderUrl = event.senderFrame?.url ?? event.sender.getURL();
+  if (!senderUrl.startsWith('chrome-extension://')) return { ok: false, error: '不可信来源' };
+  if (url.startsWith('chrome-extension://')) {
+    const match = url.match(/^chrome-extension:\/\/([^/]+)\/?(.*)$/);
+    if (!match) return { ok: false, error: '地址无效' };
+    const page = match[2] ? `${match[2]}${url.includes('#') ? url.slice(url.indexOf('#')) : ''}` : '';
+    const opened = await openExtensionPage(match[1], page || 'options.html');
+    return opened.ok ? { ok: true, url: opened.url } : { ok: false, error: opened.error };
+  }
+  if (!isSafeHttpUrl(url)) return { ok: false, error: '只允许打开网页地址' };
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: '主窗口不可用' };
+  // The renderer owns tabs, so it opens the tab; the window is raised here
+  // because a popup that closes should not leave the browser in the background.
+  mainWindow.webContents.send('window:open-url', url);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  return { ok: true, url };
+});
 ipcMain.handle('extensions:close-popup', () => closeExtensionPopup());
 ipcMain.handle('extensions:open-folder', async () => {
   const target = extensionsDirectory ?? appPaths.extensions;
@@ -3425,6 +3456,32 @@ ipcMain.handle('bookmarks:export-file', async (event, content, suggestedName) =>
 ipcMain.handle('shell:open-external', (_event, url) => {
   if (isSafeHttpUrl(url)) return shell.openExternal(url);
   return false;
+});
+
+// Cookies are held in memory and only written out when the network service
+// shuts down cleanly. An update closes the app from the outside (the NSIS
+// installer waits for the process), so a session that ended with a sign-in
+// could be lost and every site asked for its password again. Flushing first,
+// with a hard timeout so a stuck profile can never block quitting.
+let cookiesFlushed = false;
+app.on('before-quit', (event) => {
+  if (cookiesFlushed || !browserSession) return;
+  cookiesFlushed = true;
+  event.preventDefault();
+  let finished = false;
+  let timer;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (timer) clearTimeout(timer);
+    app.quit();
+  };
+  timer = setTimeout(finish, 1500);
+  Promise.allSettled([
+    browserSession.cookies.flushStore(),
+    browserSession.flushStorageData(),
+    incognitoSession ? incognitoSession.cookies.flushStore() : Promise.resolve(),
+  ]).then(finish, finish);
 });
 
 app.on('will-quit', () => {

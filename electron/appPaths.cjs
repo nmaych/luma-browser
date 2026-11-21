@@ -194,6 +194,12 @@ function configureUserData(app, { log = () => {}, localAppData } = {}) {
     log(`[paths] cannot create ${paths.userData}: ${message}`);
   }
   app.setPath('userData', paths.userData);
+  // Chromium resolves its profile from the command line before any window
+  // exists, and `setPath` alone can leave the OS crypto key and the cookie
+  // store pointing at different directories for one session — which shows up as
+  // "every site forgot my login" after an update. Naming it explicitly keeps a
+  // single profile in play from process start.
+  app.commandLine.appendSwitch('user-data-dir', paths.userData);
   ensureUpdateDirs(paths);
   return { ...paths, overridden: false, migration };
 }

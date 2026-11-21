@@ -172,6 +172,7 @@ export function parseBrowserInput(
     url: getSearchUrl(engine, input, customEngines),
     title: `${input} - 搜索`,
     isExternal: true,
+    isSearch: true,
   };
 }
 

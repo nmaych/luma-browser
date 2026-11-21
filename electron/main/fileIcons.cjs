@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const peIcon = require('./peIcon.cjs');
 
 /**
  * Icons for finished downloads.
@@ -11,6 +12,10 @@ const path = require('node:path');
  * fork) and only fall back to the extension table in the renderer when that
  * fails. Images additionally get a thumbnail, because the shell reports the
  * associated photo viewer for every one of them.
+ *
+ * Windows answers `app.getFileIcon` with its generic "application" artwork for
+ * every executable, so PE resources are read directly first; the shell stays as
+ * the fallback for formats we cannot parse.
  */
 
 const THUMBNAIL_EXTENSIONS = new Set([
@@ -88,6 +93,38 @@ async function shellIconFor(app, target) {
   }
 }
 
+/**
+ * The artwork an executable carries in its own resources. Windows reports a
+ * generic application icon through the shell, so an installer's real logo has
+ * to be read from the PE image instead.
+ */
+function embeddedIconFrom(nativeImage, target) {
+  if (!peIcon.PE_EXTENSIONS.has(extensionOf(target))) return null;
+  let image = null;
+  try {
+    const found = peIcon.iconFromFile(target);
+    if (!found) return null;
+    if (found.kind === 'png') {
+      image = nativeImage.createFromBuffer(found.data);
+    } else {
+      const decoded = peIcon.dibToBgra(found.data);
+      if (!decoded) return null;
+      image = nativeImage.createFromBitmap(decoded.bitmap, { width: decoded.width, height: decoded.height });
+    }
+  } catch {
+    return null;
+  }
+  if (!image || image.isEmpty()) return null;
+  const size = image.getSize();
+  if (!size.width || !size.height) return null;
+  const fitted = scaleToFit(size.width, size.height, THUMBNAIL_EDGE);
+  const resized = fitted.width === size.width && fitted.height === size.height
+    ? image
+    : image.resize({ ...fitted, quality: 'best' });
+  const dataUrl = resized.toDataURL();
+  return dataUrl && dataUrl.length > 32 ? { dataUrl, kind: 'shell' } : null;
+}
+
 async function buildIcon(target, stat) {
   // Required lazily so the pure helpers above stay usable outside Electron.
   const { app, nativeImage } = require('electron');
@@ -95,6 +132,8 @@ async function buildIcon(target, stat) {
     const thumbnail = thumbnailFrom(nativeImage, target);
     if (thumbnail) return thumbnail;
   }
+  const embedded = embeddedIconFrom(nativeImage, target);
+  if (embedded) return embedded;
   return shellIconFor(app, target);
 }
 

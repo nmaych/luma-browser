@@ -80,12 +80,15 @@ describe('configureUserData', () => {
     mkdirSync(legacy, { recursive: true });
     writeFileSync(path.join(legacy, 'luma-settings.json'), '{}');
     const app = {
-      commandLine: { hasSwitch: () => false },
+      commandLine: { hasSwitch: () => false, appendSwitch: vi.fn() },
       getPath: () => path.join(process.env.APPDATA!, 'Luma Browser'),
       setPath: vi.fn(),
     };
     const result = configureUserData(app, { log: () => undefined, localAppData });
     expect(app.setPath).toHaveBeenCalledWith('userData', path.join(localAppData, 'Luma Browser', 'User Data'));
+    // Chromium resolves its profile from the command line before `setPath`
+    // applies, so both have to name the same directory.
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith('user-data-dir', path.join(localAppData, 'Luma Browser', 'User Data'));
     expect(result.overridden).toBe(false);
     // Creating the profile directory before migrating would make Windows refuse
     // the rename and silently downgrade the move to a full copy.

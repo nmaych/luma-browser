@@ -168,5 +168,7 @@ export interface ParsedInput {
   url: string;
   title: string;
   isExternal: boolean;
+  /** The input was not a URL, so the address bar offers a search instead. */
+  isSearch?: boolean;
   message?: string;
 }
