@@ -9,16 +9,17 @@
 /**
  * bilibili.com home carousel.
  *
- * The homepage carousel renders 11 slides but only 9 pagination dots, because
- * two ad placeholders come back as zero-width slides. The site's index math then
- * walks past the end of the strip: the viewport lands on empty space, so the
- * banner area shows a blank grey block for several seconds while the dots and
- * arrows keep working.
+ * The homepage carousel ships eleven slides but only nine pagination dots: two
+ * of the slides are the empty ad slot, which the site fills with `eva.png`, a
+ * 76px placeholder tile. The dots skip those two, the automatic rotation does
+ * not, so every full cycle parks the strip on a slide with nothing to paint: the
+ * banner area turns into a white-to-grey gradient for a whole rotation while the
+ * dots and arrows keep working.
  *
- * The patch watches the strip geometry. An index past the last dot is repaired
- * immediately; a viewport with no slide of usable width overlapping it is
- * repaired after four samples (~0.8s, far longer than a slide transition). It
- * stays out of the way while the site itself shows its "content blocked" notice.
+ * The patch samples the strip and steps off a placeholder slide with the next
+ * pagination dot. The two placeholder slides are adjacent, so two steps are
+ * needed in a row; the cooldown keeps that from becoming a click loop, and the
+ * geometry fallback still covers an index that runs off the end of the strip.
  */
 const BILIBILI_CAROUSEL_FIX = `(function () {
   if (window.__lumaCarouselFix) return;
@@ -43,8 +44,7 @@ const BILIBILI_CAROUSEL_FIX = `(function () {
   }
 
   // The strip is translated by whole slide widths, so the site's index can park
-  // the viewport past the last real slide. Nothing can be painted there; this is
-  // the exact signature of the defect.
+  // the viewport past the last real slide. Nothing can be painted there.
   function pastLastDot(wrap) {
     var dots = wrap.querySelectorAll('.carousel-dots-dot');
     var strip = wrap.querySelector('.vui_carousel__slides');
@@ -55,21 +55,41 @@ const BILIBILI_CAROUSEL_FIX = `(function () {
     return Number(match[1]) / 100 > dots.length - 1 + 0.01;
   }
 
-  // Geometry rather than hit testing: slide transitions animate the strip, so
-  // elementFromPoint reports the moving container for a moment and cannot tell
-  // a transition apart from an empty viewport.
-  function hasUsableSlide(wrap) {
+  // The empty ad slot comes back as eva.png, a 76px transparent tile, sometimes
+  // scaled up by the slide. Anything that small, or that specific, gives the
+  // reader nothing to look at even though the slide itself has a healthy width.
+  function slideCoverState(slide) {
+    var img = slide.querySelector('img');
+    if (!img) return 'blank';
+    var src = img.currentSrc || img.src || '';
+    if (/\\/eva\\.png(\\?|$)/.test(src)) return 'blank';
+    if (img.naturalWidth > 0 && img.naturalWidth < 200) return 'blank';
+    return 'cover';
+  }
+
+  // 'covered'     — the viewport shows a real banner
+  // 'placeholder' — it sits on the empty ad slot instead
+  // 'empty'       — no slide of usable width overlaps the viewport at all
+  function viewportState(wrap) {
     var box = wrap.getBoundingClientRect();
     var left = Math.max(box.left, 0);
     var right = Math.min(box.right, window.innerWidth);
-    if (right - left < 80) return true;
+    if (right - left < 80) return 'covered';
     var slides = wrap.querySelectorAll('.vui_carousel__slide');
+    var overlapping = 0;
+    var covered = 0;
+    var blank = 0;
     for (var i = 0; i < slides.length; i += 1) {
       var rect = slides[i].getBoundingClientRect();
       if (rect.width < 40) continue;
-      if (rect.right > left + 24 && rect.left < right - 24) return true;
+      if (rect.right <= left + 24 || rect.left >= right - 24) continue;
+      overlapping += 1;
+      if (slideCoverState(slides[i]) === 'cover') covered += 1;
+      else blank += 1;
     }
-    return false;
+    if (!overlapping) return 'empty';
+    if (covered) return 'covered';
+    return blank ? 'placeholder' : 'empty';
   }
 
   function advance(wrap) {
@@ -84,10 +104,8 @@ const BILIBILI_CAROUSEL_FIX = `(function () {
     return true;
   }
 
-  function repair(wrap) {
-    // Never click twice in quick succession: a slow re-render must not cascade
-    // into a burst of pagination jumps.
-    if (Date.now() - lastRepair < 1500) return;
+  function repair(wrap, cooldown) {
+    if (Date.now() - lastRepair < cooldown) return;
     if (!advance(wrap)) return;
     lastRepair = Date.now();
     window.__lumaCarouselFixRepairs += 1;
@@ -98,17 +116,25 @@ const BILIBILI_CAROUSEL_FIX = `(function () {
     var wrap = document.querySelector('.vui_carousel');
     if (!wrap || !onScreen(wrap)) { strikes = 0; return; }
     if (siteShowsNotice(wrap)) { strikes = 0; return; }
-    // Parking past the last dot can only happen because of the defect, so it is
-    // repaired on the first sample; waiting would only lengthen the grey flash.
-    if (pastLastDot(wrap)) { strikes = 0; repair(wrap); return; }
-    if (hasUsableSlide(wrap)) { strikes = 0; return; }
+    if (pastLastDot(wrap)) { strikes = 0; repair(wrap, 600); return; }
+    var state = viewportState(wrap);
+    if (state === 'covered') { strikes = 0; return; }
+    if (state === 'placeholder') {
+      // Deterministic: the strip is parked on the ad slot, not mid-transition.
+      // Step off right away, then once more for the second adjacent slot.
+      strikes = 0;
+      repair(wrap, 600);
+      return;
+    }
+    // Nothing of usable width overlaps the viewport: wait out a slide transition
+    // before deciding the strip really is empty.
     strikes += 1;
     if (strikes < 4) return;
     strikes = 0;
-    repair(wrap);
+    repair(wrap, 1500);
   }
 
-  window.setInterval(check, 200);
+  window.setInterval(check, 150);
 })();`;
 
 const SITE_FIXES = [
