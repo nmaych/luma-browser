@@ -134,8 +134,8 @@ async function downloadBytes(url, headers = {}) {
 //    the objects API: same tree, same parents, same dates -> same SHA.
 // ---------------------------------------------------------------------------
 
-function parseIdentities() {
-  const raw = git(['cat-file', '-p', 'HEAD']);
+function parseIdentities(sha) {
+  const raw = git(['cat-file', '-p', sha]);
   const pick = (name) => {
     const line = raw.split('\n').find((entry) => entry.startsWith(`${name} `));
     const match = line?.match(/^(\w+) (.+) <([^>]*)> (\d+) ([+-])(\d{2})(\d{2})$/);
@@ -196,7 +196,7 @@ async function pushCommitThroughApi(head, parentSha) {
     throw new Error(`rebuilt tree ${tree.sha} does not match local ${localTree}; refusing to publish a different source`);
   }
 
-  const { author, committer, message } = parseIdentities();
+  const { author, committer, message } = parseIdentities(head);
   const commit = await apiJson(`/repos/${OWNER}/${REPO}/git/commits`, {
     method: 'POST',
     body: JSON.stringify({ message, tree: tree.sha, parents: [parentSha], author, committer }),
@@ -217,44 +217,74 @@ async function pushCommitThroughApi(head, parentSha) {
   return commit.sha;
 }
 
+/** GitHub answers 422 ("No commit found") for a SHA it has never seen. */
+async function commitOnRemote(sha) {
+  try {
+    await apiJson(`/repos/${OWNER}/${REPO}/commits/${sha}`);
+    return true;
+  } catch (error) {
+    const missing = error.status === 404 || (error.status === 422 && /No commit found/i.test(error.message));
+    if (!missing) throw error;
+    return false;
+  }
+}
+
 async function ensureCommitOnRemote() {
   const head = git(['rev-parse', 'HEAD']).trim();
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).trim();
-  try {
-    await apiJson(`/repos/${OWNER}/${REPO}/commits/${head}`);
+  if (await commitOnRemote(head)) {
     log(`Commit ${head.slice(0, 7)} already on GitHub.`);
     return { head, branch };
-  } catch (error) {
-    // GitHub answers 422 ("No commit found") for a SHA it has never seen.
-    const missing = error.status === 404 || (error.status === 422 && /No commit found/i.test(error.message));
-    if (!missing) throw error;
   }
 
   if (!pushCommit) {
     throw new Error(`commit ${head.slice(0, 7)} is missing on GitHub and --no-push-commit was given`);
   }
 
-  const parentSha = git(['rev-parse', 'HEAD^']).trim();
-  try {
-    await apiJson(`/repos/${OWNER}/${REPO}/commits/${parentSha}`);
-  } catch {
-    throw new Error(`parent ${parentSha.slice(0, 7)} is not on GitHub either; push the history with git first`);
+  // Walk back until GitHub recognises a commit. Everything above it has to be
+  // rebuilt, oldest first, so each parent exists before its child is created.
+  const missing = [];
+  let base = '';
+  let cursor = head;
+  for (;;) {
+    if (await commitOnRemote(cursor)) { base = cursor; break; }
+    missing.unshift(cursor);
+    if (missing.length > 100) {
+      throw new Error('more than 100 commits are missing on GitHub; push the history with git first');
+    }
+    let parent = '';
+    try {
+      parent = git(['rev-parse', `${cursor}^`]).trim();
+    } catch {
+      parent = '';
+    }
+    if (!parent) {
+      throw new Error('reached the root commit without a base on GitHub; push the history with git first');
+    }
+    cursor = parent;
   }
+  log(`${missing.length} commit(s) missing on GitHub, replaying on top of ${base.slice(0, 7)}.`);
+
   // A dry run must not mutate anything, so stop right before the objects API.
   if (dryRun) {
-    log(`[dry-run] would rebuild ${head.slice(0, 7)} on top of ${parentSha.slice(0, 7)} and move ${branch}`);
+    log(`[dry-run] would rebuild ${missing.map((sha) => sha.slice(0, 7)).join(' -> ')} and move ${branch}`);
     return { head, branch, pending: true };
   }
-  const remote = await pushCommitThroughApi(head, parentSha);
+
+  for (const sha of missing) {
+    const parent = git(['rev-parse', `${sha}^`]).trim();
+    await pushCommitThroughApi(sha, parent);
+  }
+
   const ref = await apiJson(`/repos/${OWNER}/${REPO}/git/ref/heads/${branch}`);
-  if (ref.object.sha !== parentSha) {
-    throw new Error(`${branch} on GitHub is ${ref.object.sha.slice(0, 7)}, not the parent; history diverged, push manually`);
+  if (ref.object.sha !== base) {
+    throw new Error(`${branch} on GitHub is ${ref.object.sha.slice(0, 7)}, not the base ${base.slice(0, 7)}; history diverged, push manually`);
   }
   await apiJson(`/repos/${OWNER}/${REPO}/git/refs/heads/${branch}`, {
     method: 'PATCH',
-    body: JSON.stringify({ sha: remote, force: false }),
+    body: JSON.stringify({ sha: head, force: false }),
   });
-  log(`Moved ${branch} to ${remote.slice(0, 7)}.`);
+  log(`Moved ${branch} to ${head.slice(0, 7)}.`);
   return { head, branch };
 }
 
