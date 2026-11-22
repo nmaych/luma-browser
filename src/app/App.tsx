@@ -33,7 +33,7 @@ import { ContextMenu, type ContextMenuEntry } from '../components/common/Context
 import { Modal } from '../components/common/Modal';
 import { PageHostLayer } from '../components/browser/PageHostLayer';
 import type { PageHandle } from './pageHandle';
-import { EmbeddedDevTools } from '../components/browser/EmbeddedDevTools';
+import { DEVTOOLS_RESIZE_GUTTER, EmbeddedDevTools } from '../components/browser/EmbeddedDevTools';
 import { FindBar } from '../components/browser/FindBar';
 import { MobileNavigation } from '../components/browser/MobileNavigation';
 import { NavigationBar } from '../components/browser/NavigationBar';
@@ -63,7 +63,7 @@ import {
 } from '../utils/reader';
 import { matchShortcutEvent } from '../utils/shortcuts';
 import { readStorage, writeStorage } from '../utils/storage';
-import { INTERNAL_ROUTES, getHost, getInternalPage, isExternalUrl } from '../utils/url';
+import { INTERNAL_ROUTES, getHost, getInternalPage, isExternalUrl, sitesIncludeHost } from '../utils/url';
 import { useBrowser } from './useBrowser';
 import { setNativePageVisible } from '../hooks/useNativePageVisible';
 
@@ -172,7 +172,6 @@ export function App() {
   const [pageContext, setPageContext] = useState<PageContextState | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const [devtoolsOpen, setDevtoolsOpen] = useState(false);
-  const [devtoolsWidth, setDevtoolsWidth] = useState(0);
   const [tabOverlayOpen, setTabOverlayOpen] = useState(false);
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const pendingTabDrag = useRef<Promise<unknown> | null>(null);
@@ -230,7 +229,7 @@ export function App() {
   const activeNativeNav = nativeNavigation[browser.activeTabId];
   const activeHost = getHost(browser.activeEntry.url).toLowerCase();
   const activeReaderFont = READER_FONTS.find((font) => font.id === readerFontFamily) ?? READER_FONTS[0];
-  const adblockSiteDisabled = Boolean(activeHost && adblock?.disabledSites.includes(activeHost));
+  const adblockSiteDisabled = sitesIncludeHost(adblock?.disabledSites, activeHost);
   const blockedCount = blockedByTab[browser.activeTabId] ?? 0;
 
   useEffect(() => {
@@ -2226,7 +2225,9 @@ export function App() {
               visible={showDesktopWeb}
               covered={pageCovered}
               insetTop={findOpen ? 52 : 0}
-              insetRight={devtoolsOpen && showDesktopWeb ? devtoolsWidth + 6 : 0}
+              // The panel already takes its width out of the flex row, so only
+              // the 6px strip its resize handle lives in needs to stay clear.
+              insetRight={devtoolsOpen && showDesktopWeb ? DEVTOOLS_RESIZE_GUTTER : 0}
               suspendedTabId={draggingTabId}
               pageZoom={browser.preferences.webZoom}
               pageFontSize={browser.preferences.webFontSize}
@@ -2436,7 +2437,6 @@ export function App() {
               resizeDevTools={desktop.resizeDevTools}
               setDevToolsVisible={desktop.setDevToolsVisible}
               closeDevTools={desktop.closeDevTools}
-              onWidthChange={setDevtoolsWidth}
             />
           ) : null;
         })()}

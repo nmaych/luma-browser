@@ -39,6 +39,23 @@ export function getHost(url: string): string {
   }
 }
 
+/**
+ * Whether a paused site covers this host. Mirrors `electron/main/siteMatch.cjs`:
+ * a site covers itself and its subdomains, and `www.` is not part of its
+ * identity — the toolbar may hand over either form.
+ */
+export function hostMatchesSite(host: string, site: string): boolean {
+  const key = String(host ?? '').trim().toLowerCase().replace(/^www\./, '');
+  const parent = String(site ?? '').trim().toLowerCase().replace(/^www\./, '');
+  if (!key || !parent) return false;
+  return key === parent || key.endsWith(`.${parent}`);
+}
+
+export function sitesIncludeHost(sites: string[] | undefined, host: string): boolean {
+  if (!Array.isArray(sites) || !host) return false;
+  return sites.some((site) => hostMatchesSite(host, site));
+}
+
 /** Converts Windows, POSIX and file:// input into a file URL; returns null for other text. */
 export function toFileUrl(rawInput: string): string | null {
   const input = rawInput.trim();

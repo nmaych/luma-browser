@@ -17,6 +17,7 @@ const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./m
 const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
 const { translateTexts } = require('./main/translate.cjs');
+const { hostMatchesSite, siteKey, sitesIncludeHost } = require('./main/siteMatch.cjs');
 const {
   normalizeExternalBounds,
   normalizeScreenPoint,
@@ -446,7 +447,7 @@ function applyCosmeticFilters(contents) {
   const url = contents.getURL();
   if (!isSafeHttpUrl(url)) return;
   const siteHost = hostnameOf(url);
-  if (!siteHost || appSettings.adblock.disabledSites.includes(siteHost)) return;
+  if (!siteHost || sitesIncludeHost(appSettings.adblock.disabledSites, siteHost)) return;
   // Site patches go last so their higher specificity beats the rule lists.
   // Some hosts opt out of the lists entirely: there the cosmetics only ever
   // mangle the layout (see COSMETIC_EXEMPT in site-fixes.cjs).
@@ -480,11 +481,13 @@ function applyCosmeticFiltersToAll() {
 function refreshAdblockForHost(host) {
   const trimmed = String(host || '').toLowerCase();
   if (!trimmed) return;
-  const disabled = appSettings.adblock.disabledSites.includes(trimmed);
+  const disabled = sitesIncludeHost(appSettings.adblock.disabledSites, trimmed);
   for (const contents of webContents.getAllWebContents()) {
     if (contents.isDestroyed()) continue;
     const url = contents.getURL();
-    if (!url || hostnameOf(url) !== trimmed) continue;
+    // The page host carries its `www.` (and may be a subdomain of the site the
+    // switch was flipped on), so this has to be a site match, not equality.
+    if (!url || !hostMatchesSite(hostnameOf(url), trimmed)) continue;
     if (disabled) {
       const key = cosmeticCssKeys.get(contents.id);
       cosmeticCssKeys.delete(contents.id);
@@ -537,7 +540,7 @@ function attachAdBlocking(targetSession) {
       if (!appSettings.adblock.enabled) return callback({ cancel: false });
       if (details.resourceType === 'mainFrame') return callback({ cancel: false });
       const siteHost = requestSiteHost(details);
-      if (!siteHost || appSettings.adblock.disabledSites.includes(siteHost)) return callback({ cancel: false });
+      if (!siteHost || sitesIncludeHost(appSettings.adblock.disabledSites, siteHost)) return callback({ cancel: false });
       const siteUrl = requestSiteUrl(details);
       const result = adblockManager
         ? adblockManager.match({
@@ -1688,6 +1691,24 @@ app.whenReady().then(() => {
   });
   browserSession = session.fromPartition(APP_PARTITION);
   incognitoSession = session.fromPartition(INCOGNITO_PARTITION);
+  // A profile that silently lands in another directory looks exactly like
+  // "every site forgot my login". Record where the cookie store really is, and
+  // shout once when it is not the profile this build intends to use.
+  try {
+    const storagePath = typeof browserSession.getStoragePath === 'function'
+      ? browserSession.getStoragePath()
+      : '';
+    if (storagePath) {
+      const expected = path.resolve(app.getPath('userData')).toLowerCase();
+      const actual = path.resolve(storagePath).toLowerCase();
+      if (!actual.startsWith(expected)) {
+        console.error('[paths] cookie store is outside the profile:', storagePath);
+        appendAppLog(`[paths] storage mismatch: ${storagePath} (expected under ${expected})`);
+      }
+    }
+  } catch {
+    // A diagnostic must never keep the browser from starting.
+  }
   for (const targetSession of [browserSession, incognitoSession]) {
     configureSession(targetSession, {
       // Luma asks before granting camera, microphone, geolocation or notifications.
@@ -2574,11 +2595,12 @@ ipcMain.handle('adblock:set-enabled', (_event, enabled) => {
 });
 ipcMain.handle('adblock:set-site', (_event, host, disabled) => {
   if (typeof host !== 'string' || !/^[a-z0-9.-]{1,253}$/i.test(host)) return adblockOverview();
-  const cleanHost = host.toLowerCase();
-  const sites = new Set(appSettings.adblock.disabledSites);
-  if (disabled) sites.add(cleanHost);
-  else sites.delete(cleanHost);
-  appSettings.adblock.disabledSites = [...sites];
+  // One canonical entry per site: `www.` is presentation, not identity.
+  const cleanHost = siteKey(host);
+  if (!cleanHost) return adblockOverview();
+  const sites = appSettings.adblock.disabledSites.filter((site) => siteKey(site) !== cleanHost);
+  if (disabled) sites.push(cleanHost);
+  appSettings.adblock.disabledSites = sites;
   saveAppSettings();
   refreshAdblockForHost(cleanHost);
   return adblockOverview();
@@ -3437,8 +3459,66 @@ ipcMain.handle('clipboard:read', async () => {
   const text = await clipboard.readText();
   return typeof text === 'string' ? text.slice(0, 100_000) : '';
 });
+/**
+ * Site data can only be deleted on purpose, but "on purpose" is one click away
+ * and costs every login the profile holds. Before a profile-wide wipe the
+ * cookie store is copied aside, and every wipe leaves a line in the update log,
+ * so a lost sign-in can be traced instead of guessed at.
+ */
+const COOKIE_BACKUP_KEEP = 5;
+
+function cookieStorePath() {
+  return path.join(app.getPath('userData'), 'Partitions', 'luma-browser', 'Network', 'Cookies');
+}
+
+function pruneCookieBackups(directory) {
+  try {
+    const files = fs.readdirSync(directory)
+      .filter((name) => name.startsWith('cookies-') && name.endsWith('.db'))
+      .sort()
+      .reverse();
+    for (const name of files.slice(COOKIE_BACKUP_KEEP)) {
+      fs.rmSync(path.join(directory, name), { force: true });
+    }
+  } catch {
+    // Pruning is housekeeping; a full directory must not block the wipe.
+  }
+}
+
+function backupCookieStore(reason) {
+  const source = cookieStorePath();
+  if (!fs.existsSync(source)) return null;
+  try {
+    const directory = path.join(app.getPath('userData'), 'profile-backups');
+    fs.mkdirSync(directory, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const target = path.join(directory, `cookies-${stamp}-${reason}.db`);
+    fs.copyFileSync(source, target);
+    pruneCookieBackups(directory);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+/** One line per notable app event, in the file the updater already writes. */
+function appendAppLog(entry) {
+  try {
+    fs.appendFileSync(appPaths.log, `${new Date().toISOString()} ${entry}\n`, 'utf8');
+  } catch {
+    // The log lives next to the installers; a read-only install has no log.
+  }
+}
+
+function logPrivacyAction(message) {
+  appendAppLog(`[privacy] ${message}`);
+}
+
 ipcMain.handle('browser:clear-site-data', async () => {
   if (!browserSession) return false;
+  await browserSession.cookies.flushStore().catch(() => undefined);
+  backupCookieStore('clear-site-data');
+  logPrivacyAction('cleared all site data (cookies, storage, cache)');
   await browserSession.clearStorageData();
   await browserSession.clearCache();
   return true;
@@ -3482,6 +3562,7 @@ ipcMain.handle('browser:clear-site-data-for-domain', async (_event, domain) => {
     for (const origin of [`https://${cleanDomain}`, `http://${cleanDomain}`]) {
       await browserSession.clearStorageData({ origin }).catch(() => undefined);
     }
+    logPrivacyAction(`cleared site data for ${cleanDomain}`);
     return true;
   } catch {
     return false;
@@ -3494,6 +3575,9 @@ ipcMain.handle('browser:clear-cache', async () => {
 });
 ipcMain.handle('browser:clear-cookies', async () => {
   if (!browserSession) return false;
+  await browserSession.cookies.flushStore().catch(() => undefined);
+  backupCookieStore('clear-cookies');
+  logPrivacyAction('cleared all cookies');
   await browserSession.clearStorageData({ storages: ['cookies'] });
   return true;
 });

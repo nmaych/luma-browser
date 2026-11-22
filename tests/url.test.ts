@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { displayUrl, getInternalPage, parseBrowserInput } from '../src/utils/url';
+import { displayUrl, getInternalPage, hostMatchesSite, parseBrowserInput, sitesIncludeHost } from '../src/utils/url';
 
 describe('parseBrowserInput', () => {
   it('adds HTTPS to a domain', () => {
@@ -51,6 +51,14 @@ describe('parseBrowserInput', () => {
     expect(parseBrowserInput('http://').ok).toBe(false);
     expect(parseBrowserInput('javascript:alert(1)').ok).toBe(false);
     expect(parseBrowserInput('ftp://example.com').ok).toBe(false);
+  });
+
+  it('matches a paused site through www and its subdomains', () => {
+    expect(hostMatchesSite('www.bilibili.com', 'bilibili.com')).toBe(true);
+    expect(hostMatchesSite('api.bilibili.com', 'bilibili.com')).toBe(true);
+    expect(hostMatchesSite('bilibili.com.example.test', 'bilibili.com')).toBe(false);
+    expect(sitesIncludeHost(['bilibili.com'], 'm.bilibili.com')).toBe(true);
+    expect(sitesIncludeHost(['bilibili.com'], 'example.com')).toBe(false);
   });
 
   it('keeps the home omnibox empty and simplifies external URLs', () => {

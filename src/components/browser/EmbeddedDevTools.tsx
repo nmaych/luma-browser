@@ -6,6 +6,12 @@ import { readStorage, writeStorage } from '../../utils/storage';
 const WIDTH_KEY = 'luma.devtools.width.v1';
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 980;
+/**
+ * Width of the strip left of the panel where the resize handle lives. The
+ * native page surface has to stop short of it, or the handle would be covered
+ * by the page view and could never be grabbed (see `.devtools-panel__resize`).
+ */
+export const DEVTOOLS_RESIZE_GUTTER = 6;
 
 function clampWidth(value: number): number {
   const maxForWindow = Math.max(280, Math.min(MAX_WIDTH, window.innerWidth - 300));
