@@ -150,12 +150,14 @@ const SITE_FIXES = [
  *    (`tips1`/`tips2`), so when the unsold slide is not hidden the plate stays
  *    and the whole banner reads as a white-to-grey gradient. Hide the plate.
  *
- * 2. The recommendation grid: the feed reserves cells for ads by appending
- *    cards and positioning them by index. Once the ad payload is blocked the
- *    card stays empty, `##.container > div.feed-card:empty` removes the card
- *    itself, and the site never recovers the cell — the rest of the row shifts
- *    and the grid stops lining up with the carousel beside it. Keep the cell:
- *    the site fills it with ordinary recommendations as soon as it renders.
+ * 2. The recommendation grid is laid out by index and its rows have fixed
+ *    heights, so a missing card is never re-flowed: the cell just stays empty
+ *    and the row under it looks off. The lists also gut the ad cards instead of
+ *    removing the cell — `.bili-video-card.is-rcmd:has(…stats icon…)` hides the
+ *    inner card, the `-3000px` group teleports the cover link and the info —
+ *    which leaves a full-size empty box where a video should be. Keep the cell
+ *    and keep the card inside it: the ad card is a normal promotional video, so
+ *    putting it back fills the grid and the rows line up again.
  *
  * The `:not(#…)` is a specificity bump so these beat the `!important`
  * declarations in the lists without editing them.
@@ -165,6 +167,15 @@ body .container > div.floor-single-card:not(#luma-grid-keep),
 body .container > div.bili-video-card:not(#luma-grid-keep) {
   display: block !important;
   visibility: visible !important;
+}
+
+body .container .bili-video-card.is-rcmd:not(#luma-grid-keep),
+body .container .bili-video-card__info:not(#luma-grid-keep),
+body .container .bili-video-card__wrap > a:not(#luma-grid-keep) {
+  display: block !important;
+  visibility: visible !important;
+  position: relative !important;
+  left: auto !important;
 }
 
 body .vui_carousel .extension-tips-v2:not(#luma-grid-keep) {

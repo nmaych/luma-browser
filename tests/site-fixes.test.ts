@@ -59,6 +59,18 @@ describe('site styles', () => {
     expect(css).toContain(':not(#luma-grid-keep)');
   });
 
+  it('puts the gutted feed card back inside its cell', () => {
+    const css = siteStylesFor('https://www.bilibili.com/');
+    // The lists hide the inner `.bili-video-card.is-rcmd` (stats-icon match) and
+    // teleport the cover link plus the info block to left:-3000px. The cell keeps
+    // its size, so the only thing left is an empty box where a video should be.
+    expect(css).toContain('.bili-video-card.is-rcmd');
+    expect(css).toContain('.bili-video-card__info');
+    expect(css).toContain('.bili-video-card__wrap > a');
+    expect(css).toContain('position: relative !important');
+    expect(css).toContain('left: auto !important');
+  });
+
   it('hides the site\'s own blocked-content plate inside the carousel', () => {
     const css = siteStylesFor('https://www.bilibili.com/');
     // The lists hide only tips1/tips2 and leave the grey plate behind, which is
