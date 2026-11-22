@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { siteFixesFor } = require('../electron/main/site-fixes.cjs');
+const { siteFixesFor, siteStylesFor } = require('../electron/main/site-fixes.cjs');
 
 describe('site fixes', () => {
   it('matches bilibili hosts and their subdomains', () => {
@@ -45,5 +45,35 @@ describe('site fixes', () => {
     expect(fix.script).toContain('naturalWidth < 200');
     expect(fix.script).toContain("state === 'placeholder'");
     expect(fix.script).toContain('setInterval(check, 150)');
+  });
+});
+
+describe('site styles', () => {
+  it('keeps the recommendation grid cells alive on bilibili', () => {
+    const css = siteStylesFor('https://www.bilibili.com/');
+    expect(css).toContain('div.feed-card');
+    expect(css).toContain('div.floor-single-card');
+    expect(css).toContain('display: block !important');
+    // Filter lists hide the same cards with `!important`, so the patch needs a
+    // specificity id to win without editing the lists.
+    expect(css).toContain(':not(#luma-grid-keep)');
+  });
+
+  it('hides the site\'s own blocked-content plate inside the carousel', () => {
+    const css = siteStylesFor('https://www.bilibili.com/');
+    // The lists hide only tips1/tips2 and leave the grey plate behind, which is
+    // what reads as a blank banner.
+    expect(css).toContain('.vui_carousel .extension-tips-v2');
+    expect(css).toContain('display: none !important');
+  });
+
+  it('keeps the grid patch off other hosts and non-http documents', () => {
+    for (const url of ['https://example.com/', 'https://notbilibili.com/', 'file:///D:/dist/index.html', '']) {
+      expect(siteStylesFor(url)).toBe('');
+    }
+  });
+
+  it('accepts subdomains the same way the scripts do', () => {
+    expect(siteStylesFor('https://m.bilibili.com/index')).toContain('luma-grid-keep');
   });
 });

@@ -11,7 +11,7 @@ const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
 const { configureSession } = require('./main/sessionPolicy.cjs');
 const { createExtensionManager } = require('./extensions.cjs');
 const { createUserscriptManager } = require('./main/userscripts.cjs');
-const { siteFixesFor } = require('./main/site-fixes.cjs');
+const { siteFixesFor, siteStylesFor } = require('./main/site-fixes.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
 const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
@@ -446,9 +446,11 @@ function applyCosmeticFilters(contents) {
   if (!isSafeHttpUrl(url)) return;
   const siteHost = hostnameOf(url);
   if (!siteHost || appSettings.adblock.disabledSites.includes(siteHost)) return;
+  // Site patches go last so their higher specificity beats the rule lists.
   const payload = adblockManager.cosmetics(url);
-  if (!payload?.styles) return;
-  contents.insertCSS(payload.styles)
+  const css = [payload?.styles, siteStylesFor(url)].filter(Boolean).join('\n');
+  if (!css) return;
+  contents.insertCSS(css)
     .then((key) => {
       if (contents.isDestroyed()) return;
       cosmeticCssKeys.set(contents.id, key);

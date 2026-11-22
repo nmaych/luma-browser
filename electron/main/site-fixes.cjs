@@ -141,17 +141,67 @@ const SITE_FIXES = [
   { id: 'bilibili-carousel', host: /(^|\.)bilibili\.com$/i, script: BILIBILI_CAROUSEL_FIX },
 ];
 
+/**
+ * bilibili.com cosmetics that the filter lists get half right.
+ *
+ * 1. The blocked-content notice: every carousel slide carries an
+ *    `.extension-tips-v2` plate — a flat `rgb(241,242,243)` panel with the
+ *    "该内容被 AdGuard/AdBlock 类插件屏蔽" copy. The lists hide only the copy
+ *    (`tips1`/`tips2`), so when the unsold slide is not hidden the plate stays
+ *    and the whole banner reads as a white-to-grey gradient. Hide the plate.
+ *
+ * 2. The recommendation grid: the feed reserves cells for ads by appending
+ *    cards and positioning them by index. Once the ad payload is blocked the
+ *    card stays empty, `##.container > div.feed-card:empty` removes the card
+ *    itself, and the site never recovers the cell — the rest of the row shifts
+ *    and the grid stops lining up with the carousel beside it. Keep the cell:
+ *    the site fills it with ordinary recommendations as soon as it renders.
+ *
+ * The `:not(#…)` is a specificity bump so these beat the `!important`
+ * declarations in the lists without editing them.
+ */
+const BILIBILI_GRID_KEEP = `body .container > div.feed-card:not(#luma-grid-keep),
+body .container > div.floor-single-card:not(#luma-grid-keep),
+body .container > div.bili-video-card:not(#luma-grid-keep) {
+  display: block !important;
+  visibility: visible !important;
+}
+
+body .vui_carousel .extension-tips-v2:not(#luma-grid-keep) {
+  display: none !important;
+}`;
+
+/**
+ * Stylesheet patches, inserted after the filter list's cosmetics so a higher
+ * specificity wins.
+ */
+const SITE_STYLES = [
+  { id: 'bilibili-grid-keep', host: /(^|\.)bilibili\.com$/i, css: BILIBILI_GRID_KEEP },
+];
+
 /** @param {string} url */
-function siteFixesFor(url) {
-  let host = '';
+function parseHost(url) {
   try {
     const parsed = new URL(String(url));
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return [];
-    host = parsed.hostname;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+    return parsed.hostname;
   } catch {
-    return [];
+    return '';
   }
+}
+
+/** @param {string} url */
+function siteFixesFor(url) {
+  const host = parseHost(url);
+  if (!host) return [];
   return SITE_FIXES.filter((fix) => fix.host.test(host)).map((fix) => ({ id: fix.id, script: fix.script }));
 }
 
-module.exports = { siteFixesFor, SITE_FIXES };
+/** @param {string} url */
+function siteStylesFor(url) {
+  const host = parseHost(url);
+  if (!host) return '';
+  return SITE_STYLES.filter((style) => style.host.test(host)).map((style) => style.css).join('\n');
+}
+
+module.exports = { siteFixesFor, siteStylesFor, SITE_FIXES, SITE_STYLES };
