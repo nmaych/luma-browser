@@ -142,52 +142,50 @@ const SITE_FIXES = [
 ];
 
 /**
- * bilibili.com cosmetics that the filter lists get half right.
+ * Hosts where the rule lists' *cosmetic* filters are not applied at all.
  *
- * 1. The blocked-content notice: every carousel slide carries an
- *    `.extension-tips-v2` plate — a flat `rgb(241,242,243)` panel with the
- *    "该内容被 AdGuard/AdBlock 类插件屏蔽" copy. The lists hide only the copy
- *    (`tips1`/`tips2`), so when the unsold slide is not hidden the plate stays
- *    and the whole banner reads as a white-to-grey gradient. Hide the plate.
+ * bilibili.com is the case that forced this. Its home feed is laid out by
+ * index with fixed row heights, and the lists attack ad cards by gutting them
+ * instead of removing them:
  *
- * 2. The recommendation grid is laid out by index and its rows have fixed
- *    heights, so a missing card is never re-flowed: the cell just stays empty
- *    and the row under it looks off. The lists also gut the ad cards instead of
- *    removing the cell — `.bili-video-card.is-rcmd:has(…stats icon…)` hides the
- *    inner card, the `-3000px` group teleports the cover link and the info —
- *    which leaves a full-size empty box where a video should be. Keep the cell
- *    and keep the card inside it: the ad card is a normal promotional video, so
- *    putting it back fills the grid and the rows line up again.
+ *   `.bili-video-card.is-rcmd:has(…stats icon…)`  → hides the inner card
+ *   `a[href*="cm.bilibili.com"]… + .bili-video-card__info` → hides the info
+ *   `.container > div[class*="-card"]:has(div[style="display: none !important;"])`
+ *                                                 → teleports the card -3000px
+ *   `.container > div.feed-card:empty`            → deletes the empty cell
  *
- * The `:not(#…)` is a specificity bump so these beat the `!important`
- * declarations in the lists without editing them.
+ * Every combination of that leaves a full-size box with no picture, no title,
+ * or both, and patching them one by one from a second stylesheet kept hitting
+ * the next selector in the list. Network-level blocking still runs on these
+ * hosts, which is where the ads actually are; the cosmetic half only ever
+ * breaks the layout. So: keep the blocking, skip the styles.
  */
-const BILIBILI_GRID_KEEP = `body .container > div.feed-card:not(#luma-grid-keep),
-body .container > div.floor-single-card:not(#luma-grid-keep),
-body .container > div.bili-video-card:not(#luma-grid-keep) {
-  display: block !important;
-  visibility: visible !important;
+const COSMETIC_EXEMPT = [/(^|\.)bilibili\.com$/i];
+
+/**
+ * bilibili.com styles we still want, now that the lists no longer touch it.
+ *
+ * 1. The carousel's unsold slot renders as a full-width slide whose only image
+ *    is the 76×76 `eva.png` placeholder. The site's dot strip skips it but its
+ *    auto-advance index does not, so the strip parks on it for a whole cycle.
+ *    Hide that slide; `BILIBILI_CAROUSEL_FIX` steps the dots past the gap.
+ *
+ * 2. Every slide also carries `.extension-tips-v2`, the site's own
+ *    "该内容被 AdGuard/AdBlock 类插件屏蔽" plate — a flat `rgb(241,242,243)`
+ *    panel the size of the slide. The network rules do block the ad payload, so
+ *    this plate appears on its own; hide it or it covers the banner.
+ */
+const BILIBILI_STYLES = `.recommended-swipe-body-normal div.vui_carousel__slide:has(> div.carousel-area > div.carousel-area-img > a > img[src$="/eva.png"]) {
+  display: none !important;
 }
 
-body .container .bili-video-card.is-rcmd:not(#luma-grid-keep),
-body .container .bili-video-card__info:not(#luma-grid-keep),
-body .container .bili-video-card__wrap > a:not(#luma-grid-keep) {
-  display: block !important;
-  visibility: visible !important;
-  position: relative !important;
-  left: auto !important;
-}
-
-body .vui_carousel .extension-tips-v2:not(#luma-grid-keep) {
+body .vui_carousel .extension-tips-v2 {
   display: none !important;
 }`;
 
-/**
- * Stylesheet patches, inserted after the filter list's cosmetics so a higher
- * specificity wins.
- */
+/** Stylesheet patches, inserted after the filter list's cosmetics. */
 const SITE_STYLES = [
-  { id: 'bilibili-grid-keep', host: /(^|\.)bilibili\.com$/i, css: BILIBILI_GRID_KEEP },
+  { id: 'bilibili-carousel-plate', host: /(^|\.)bilibili\.com$/i, css: BILIBILI_STYLES },
 ];
 
 /** @param {string} url */
@@ -215,4 +213,14 @@ function siteStylesFor(url) {
   return SITE_STYLES.filter((style) => style.host.test(host)).map((style) => style.css).join('\n');
 }
 
-module.exports = { siteFixesFor, siteStylesFor, SITE_FIXES, SITE_STYLES };
+/**
+ * True when the rule lists must keep their hands off the page.
+ * @param {string} url
+ */
+function skipsRuleListCosmetics(url) {
+  const host = parseHost(url);
+  if (!host) return false;
+  return COSMETIC_EXEMPT.some((pattern) => pattern.test(host));
+}
+
+module.exports = { siteFixesFor, siteStylesFor, skipsRuleListCosmetics, SITE_FIXES, SITE_STYLES, COSMETIC_EXEMPT };

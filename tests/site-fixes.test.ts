@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { siteFixesFor, siteStylesFor } = require('../electron/main/site-fixes.cjs');
+const { siteFixesFor, siteStylesFor, skipsRuleListCosmetics } = require('../electron/main/site-fixes.cjs');
 
 describe('site fixes', () => {
   it('matches bilibili hosts and their subdomains', () => {
@@ -49,43 +49,51 @@ describe('site fixes', () => {
 });
 
 describe('site styles', () => {
-  it('keeps the recommendation grid cells alive on bilibili', () => {
-    const css = siteStylesFor('https://www.bilibili.com/');
-    expect(css).toContain('div.feed-card');
-    expect(css).toContain('div.floor-single-card');
-    expect(css).toContain('display: block !important');
-    // Filter lists hide the same cards with `!important`, so the patch needs a
-    // specificity id to win without editing the lists.
-    expect(css).toContain(':not(#luma-grid-keep)');
-  });
-
-  it('puts the gutted feed card back inside its cell', () => {
-    const css = siteStylesFor('https://www.bilibili.com/');
-    // The lists hide the inner `.bili-video-card.is-rcmd` (stats-icon match) and
-    // teleport the cover link plus the info block to left:-3000px. The cell keeps
-    // its size, so the only thing left is an empty box where a video should be.
-    expect(css).toContain('.bili-video-card.is-rcmd');
-    expect(css).toContain('.bili-video-card__info');
-    expect(css).toContain('.bili-video-card__wrap > a');
-    expect(css).toContain('position: relative !important');
-    expect(css).toContain('left: auto !important');
-  });
-
   it('hides the site\'s own blocked-content plate inside the carousel', () => {
     const css = siteStylesFor('https://www.bilibili.com/');
-    // The lists hide only tips1/tips2 and leave the grey plate behind, which is
-    // what reads as a blank banner.
+    // The network rules do block the ad payload, so the site paints its own
+    // "blocked by an extension" plate over the banner. Hide it.
     expect(css).toContain('.vui_carousel .extension-tips-v2');
     expect(css).toContain('display: none !important');
   });
 
-  it('keeps the grid patch off other hosts and non-http documents', () => {
+  it('hides the unsold carousel slide instead of letting it park there', () => {
+    const css = siteStylesFor('https://www.bilibili.com/');
+    expect(css).toContain('img[src$="/eva.png"]');
+    expect(css).toContain('div.vui_carousel__slide');
+  });
+
+  it('no longer needs specificity hacks over the filter lists', () => {
+    const css = siteStylesFor('https://www.bilibili.com/');
+    // The lists are skipped on this host, so patching their selectors is moot.
+    expect(css).not.toContain('luma-grid-keep');
+    expect(css).not.toContain('bili-video-card__info');
+  });
+
+  it('keeps the carousel patch off other hosts and non-http documents', () => {
     for (const url of ['https://example.com/', 'https://notbilibili.com/', 'file:///D:/dist/index.html', '']) {
       expect(siteStylesFor(url)).toBe('');
     }
   });
 
   it('accepts subdomains the same way the scripts do', () => {
-    expect(siteStylesFor('https://m.bilibili.com/index')).toContain('luma-grid-keep');
+    expect(siteStylesFor('https://m.bilibili.com/index')).toContain('extension-tips-v2');
+  });
+});
+
+describe('rule list cosmetics', () => {
+  it('skips bilibili so the feed lays out the way the site intends', () => {
+    // The lists gut ad cards (inner card hidden, info and cover link teleported
+    // to left:-3000px, empty cell deleted). Every patch of that ended in a
+    // full-size empty box, so this host keeps network blocking only.
+    for (const url of ['https://www.bilibili.com/', 'https://bilibili.com/video/BV1', 'https://m.bilibili.com/']) {
+      expect(skipsRuleListCosmetics(url)).toBe(true);
+    }
+  });
+
+  it('leaves every other host on the normal path', () => {
+    for (const url of ['https://example.com/', 'https://notbilibili.com/', 'https://bilibili.com.example.test/', 'about:blank', '']) {
+      expect(skipsRuleListCosmetics(url)).toBe(false);
+    }
   });
 });

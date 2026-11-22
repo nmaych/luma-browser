@@ -11,7 +11,7 @@ const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
 const { configureSession } = require('./main/sessionPolicy.cjs');
 const { createExtensionManager } = require('./extensions.cjs');
 const { createUserscriptManager } = require('./main/userscripts.cjs');
-const { siteFixesFor, siteStylesFor } = require('./main/site-fixes.cjs');
+const { siteFixesFor, siteStylesFor, skipsRuleListCosmetics } = require('./main/site-fixes.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
 const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
@@ -447,8 +447,10 @@ function applyCosmeticFilters(contents) {
   const siteHost = hostnameOf(url);
   if (!siteHost || appSettings.adblock.disabledSites.includes(siteHost)) return;
   // Site patches go last so their higher specificity beats the rule lists.
-  const payload = adblockManager.cosmetics(url);
-  const css = [payload?.styles, siteStylesFor(url)].filter(Boolean).join('\n');
+  // Some hosts opt out of the lists entirely: there the cosmetics only ever
+  // mangle the layout (see COSMETIC_EXEMPT in site-fixes.cjs).
+  const listStyles = skipsRuleListCosmetics(url) ? '' : adblockManager.cosmetics(url)?.styles;
+  const css = [listStyles, siteStylesFor(url)].filter(Boolean).join('\n');
   if (!css) return;
   contents.insertCSS(css)
     .then((key) => {

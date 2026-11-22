@@ -978,7 +978,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.21.4'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.21.5'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -1894,7 +1894,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.21.4'}</span>
+                    <span>版本 {appVersions?.app ?? '1.21.5'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>
