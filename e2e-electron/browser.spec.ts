@@ -1937,16 +1937,62 @@ test('moves between tabs with the arrow keys', async () => {
 });
 
 
-test('offers picture-in-picture for the current page', async () => {
-  const address = page.getByRole('textbox', { name: '地址和搜索栏' });
-  await address.fill('example.com/?pip=1');
-  await address.press('Enter');
-  await expect.poll(async () => (await pageInfo()).url, { timeout: 30_000 }).toContain('pip=1');
+test('offers the mini window from the video itself, not the menu', async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end(
+      '<!doctype html><meta charset="utf-8"><title>播放器</title>'
+      + '<style>body{margin:0}video{display:block;width:480px;height:270px;background:#000}</style>'
+      + '<video src="data:video/mp4;base64," muted></video>',
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addressInfo = server.address();
+  const port = typeof addressInfo === 'object' && addressInfo ? addressInfo.port : 0;
 
-  await page.getByRole('button', { name: '自定义及控制 Luma' }).click();
-  await page.getByRole('button', { name: '视频小窗' }).click();
-  // No <video> on the page: the app must explain instead of failing silently.
-  await expect(page.locator('.toast').filter({ hasText: /没有正在播放的视频/ })).toBeVisible();
+  try {
+    const address = page.getByRole('textbox', { name: '地址和搜索栏' });
+    await address.fill(`http://127.0.0.1:${port}/player`);
+    await address.press('Enter');
+    await expect.poll(async () => (await pageInfo()).url, { timeout: 30_000 }).toContain('/player');
+
+    const guestId = (await pageInfo()).webContentsId;
+    const overlay = await app.evaluate(async ({ webContents }, id) => {
+      const contents = webContents.fromId(id);
+      if (!contents) return null;
+      const point = await contents.executeJavaScript(
+        '(() => { const r = document.querySelector("video").getBoundingClientRect();'
+        + ' return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()',
+      );
+      await contents.executeJavaScript(
+        'document.dispatchEvent(new MouseEvent("mousemove", { clientX: ' + point.x
+        + ', clientY: ' + point.y + ', bubbles: true }))',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return contents.executeJavaScript(`(() => {
+        const button = document.getElementById('luma-pip-button');
+        if (!button) return null;
+        const rect = button.getBoundingClientRect();
+        const video = document.querySelector('video').getBoundingClientRect();
+        return {
+          display: getComputedStyle(button).display,
+          label: button.getAttribute('aria-label'),
+          right: Math.round(rect.right),
+          videoRight: Math.round(video.right),
+        };
+      })()`);
+    }, guestId);
+
+    expect(overlay?.display).toBe('flex');
+    expect(overlay?.label).toBe('视频小窗');
+    // Sits inside the video's top-right corner, not somewhere else on the page.
+    expect(overlay!.right).toBeLessThanOrEqual(overlay!.videoRight);
+
+    await page.getByRole('button', { name: '自定义及控制 Luma' }).click();
+    await expect(page.getByRole('button', { name: '视频小窗' })).toHaveCount(0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('returns to the same settings section and scroll offset', async () => {

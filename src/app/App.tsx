@@ -255,26 +255,6 @@ export function App() {
     };
   }, [desktop]);
 
-  const togglePictureInPicture = useCallback(async () => {
-    if (!desktop?.togglePictureInPicture) return;
-    try {
-      const result = await desktop.togglePictureInPicture(browser.activeTabId, isIncognito);
-      if (!result?.ok) {
-        browser.showToast({ tone: 'info', title: '无法进入画中画', description: result?.error ?? '这个页面没有可播放的视频' });
-        return;
-      }
-      if (result.state === 'no-video') {
-        browser.showToast({ tone: 'info', title: '这个页面没有正在播放的视频' });
-      } else if (result.state === 'unsupported') {
-        browser.showToast({ tone: 'error', title: '当前页面不支持画中画' });
-      } else if (result.state === 'closed') {
-        browser.showToast({ tone: 'success', title: '已退出视频小窗' });
-      }
-    } catch {
-      browser.showToast({ tone: 'error', title: '无法进入画中画' });
-    }
-  }, [browser.activeTabId, browser.showToast, desktop, isIncognito]);
-
   // Extension popups ask the browser to open links; they land in a new tab.
   useEffect(() => {
     if (!desktop?.onOpenUrl) return undefined;
@@ -2186,7 +2166,6 @@ export function App() {
           onBookmarks={() => browser.openInternalPage('bookmarks')}
           onHistory={() => browser.openInternalPage('history')}
           onSettings={() => browser.openInternalPage('settings')}
-          onPictureInPicture={() => void togglePictureInPicture()}
           extensionActions={extensionActions}
           onOpenExtension={(id: string, anchor: { x: number; y: number; width: number; height: number }) => {
             void desktop?.openExtensionPopup?.(id, anchor);

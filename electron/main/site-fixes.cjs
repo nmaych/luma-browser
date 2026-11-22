@@ -179,7 +179,13 @@ const BILIBILI_STYLES = `.recommended-swipe-body-normal div.vui_carousel__slide:
   display: none !important;
 }
 
-body .vui_carousel .extension-tips-v2 {
+/* The site paints the plate with
+ * .carousel .carousel-container .vui_carousel__slides .vui_carousel__slide
+ * .carousel-area .extension-tips-v2[data-v-…] { display: block !important },
+ * which outranks a plain two-class selector. The :not(id) is a specificity bump
+ * so this wins without touching the site's stylesheet.
+ */
+body .vui_carousel .carousel-area .extension-tips-v2:not(#luma-plate-keep) {
   display: none !important;
 }`;
 

@@ -12,6 +12,7 @@ const { configureSession } = require('./main/sessionPolicy.cjs');
 const { createExtensionManager } = require('./extensions.cjs');
 const { createUserscriptManager } = require('./main/userscripts.cjs');
 const { siteFixesFor, siteStylesFor, skipsRuleListCosmetics } = require('./main/site-fixes.cjs');
+const { pipButtonScriptFor } = require('./main/pip-button.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
 const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
@@ -457,12 +458,46 @@ function applyCosmeticFilters(contents) {
       if (contents.isDestroyed()) return;
       cosmeticCssKeys.set(contents.id, key);
     })
-    .catch(() => undefined);
+    .catch((error) => {
+      // A stylesheet Chromium refuses to parse must not take the page down,
+      // but swallowing the reason made a silent no-op impossible to spot.
+      console.error('[cosmetic] insert failed:', error && error.message ? error.message : error);
+    });
 }
 
 function applyCosmeticFiltersToAll() {
+  // Native WebContentsView pages report a type other than 'webview', so visit
+  // every contents and let applyCosmeticFilters skip non-http documents.
+  for (const contents of webContents.getAllWebContents()) applyCosmeticFilters(contents);
+}
+
+/**
+ * Applies a per-site ad-block change to the pages that are already open, so the
+ * switch takes effect on the spot instead of waiting for a reload. Turning
+ * blocking off also drops the badge counter: a stale "已拦截 99+" is exactly
+ * what makes the site look like it is still being blocked.
+ */
+function refreshAdblockForHost(host) {
+  const trimmed = String(host || '').toLowerCase();
+  if (!trimmed) return;
+  const disabled = appSettings.adblock.disabledSites.includes(trimmed);
   for (const contents of webContents.getAllWebContents()) {
-    if (contents.getType() === 'webview') applyCosmeticFilters(contents);
+    if (contents.isDestroyed()) continue;
+    const url = contents.getURL();
+    if (!url || hostnameOf(url) !== trimmed) continue;
+    if (disabled) {
+      const key = cosmeticCssKeys.get(contents.id);
+      cosmeticCssKeys.delete(contents.id);
+      if (key) contents.removeInsertedCSS(key).catch(() => undefined);
+      blockedCounts.set(contents.id, 0);
+      hostContentsOf(contents)?.send('adblock:blocked', {
+        webContentsId: contents.id,
+        host: trimmed,
+        count: 0,
+      });
+    } else {
+      applyCosmeticFilters(contents);
+    }
   }
 }
 
@@ -1465,6 +1500,16 @@ function injectSiteFixes(contents) {
   }
 }
 
+/** Paints the in-video "mini window" button; see main/pip-button.cjs. */
+function injectPipButton(contents) {
+  if (contents.isDestroyed()) return;
+  const script = pipButtonScriptFor(contents.getURL());
+  if (!script) return;
+  void contents.executeJavaScript(script, false).catch((error) => {
+    console.error('[pip-button] injection failed:', error);
+  });
+}
+
 function attachPageFeatures(contents, { native = false } = {}) {
   if (!contents || contents.isDestroyed()) return;
   if (!native) {
@@ -1511,6 +1556,7 @@ function attachPageFeatures(contents, { native = false } = {}) {
     applyCosmeticFilters(contents);
     injectUserscripts(contents);
     injectSiteFixes(contents);
+    injectPipButton(contents);
   });
   contents.on('render-process-gone', (_event, details) => {
     hostContentsOf(contents)?.send('browser:render-gone', {
@@ -2534,6 +2580,7 @@ ipcMain.handle('adblock:set-site', (_event, host, disabled) => {
   else sites.delete(cleanHost);
   appSettings.adblock.disabledSites = [...sites];
   saveAppSettings();
+  refreshAdblockForHost(cleanHost);
   return adblockOverview();
 });
 

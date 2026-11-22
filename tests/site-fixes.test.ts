@@ -53,7 +53,11 @@ describe('site styles', () => {
     const css = siteStylesFor('https://www.bilibili.com/');
     // The network rules do block the ad payload, so the site paints its own
     // "blocked by an extension" plate over the banner. Hide it.
-    expect(css).toContain('.vui_carousel .extension-tips-v2');
+    // The site paints the plate with a seven-class selector plus
+    // `!important`, so the patch needs both the deeper path and a specificity
+    // bump to win.
+    expect(css).toContain('.vui_carousel .carousel-area .extension-tips-v2');
+    expect(css).toContain(':not(#luma-plate-keep)');
     expect(css).toContain('display: none !important');
   });
 

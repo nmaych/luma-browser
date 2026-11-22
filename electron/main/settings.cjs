@@ -54,14 +54,20 @@ function loadSettings(filePath, defaults, shortcutKeys = []) {
 /**
  * Debounced writer. Window moves and ad-block counters mutate the state object
  * many times per second; the file is rewritten 200 ms after the last change.
+ *
+ * `filePath` may be a string or a function returning one: the profile directory
+ * only exists once Electron is ready, and resolving it lazily keeps the writer
+ * usable before `app.whenReady()`. Passing a function used to be swallowed as a
+ * truthy non-path, so every write threw and settings silently never persisted.
  */
 function createSettingsWriter(filePath, readState, delay = 200) {
+  const resolvePath = typeof filePath === 'function' ? filePath : () => filePath;
   let timer = null;
   return function save() {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       try {
-        fs.writeFileSync(filePath, JSON.stringify(readState(), null, 2), 'utf8');
+        fs.writeFileSync(resolvePath(), JSON.stringify(readState(), null, 2), 'utf8');
       } catch {
         // A read-only profile keeps settings in memory for this session.
       }

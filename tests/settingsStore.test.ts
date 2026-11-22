@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { loadSettings } = require('../electron/main/settings.cjs');
+const { createSettingsWriter, loadSettings } = require('../electron/main/settings.cjs');
 
 const DEFAULTS = {
   adblock: { enabled: true, disabledSites: [] },
@@ -55,5 +55,26 @@ describe('loadSettings', () => {
   it('clamps the blocked counter to a non-negative integer', () => {
     expect(loadSettings(tempFile(JSON.stringify({ blockedTotal: -12 })), DEFAULTS, []).blockedTotal).toBe(0);
     expect(loadSettings(tempFile(JSON.stringify({ blockedTotal: 18.7 })), DEFAULTS, []).blockedTotal).toBe(18);
+  });
+});
+
+describe('createSettingsWriter', () => {
+  it('writes the current state after the debounce window', async () => {
+    const file = tempFile();
+    const state = { adblock: { enabled: true, disabledSites: ['www.bilibili.com'] } };
+    const save = createSettingsWriter(file, () => state, 5);
+    save();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(state);
+  });
+
+  it('resolves a lazily-computed path, so pre-ready writers still persist', async () => {
+    // appSettingsPath is a function: the profile directory is only final once
+    // Electron is ready. A regression here silently drops every setting.
+    const file = tempFile();
+    const save = createSettingsWriter(() => file, () => ({ adblock: { disabledSites: [] } }), 5);
+    save();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ adblock: { disabledSites: [] } });
   });
 });

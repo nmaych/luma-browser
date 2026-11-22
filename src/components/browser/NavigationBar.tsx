@@ -76,7 +76,6 @@ interface NavigationBarProps {
   readerActive?: boolean;
   onToggleReader?: () => void;
   onScreenshot?: (options: { mode: 'save' | 'copy'; fullPage: boolean; selectRegion?: boolean }) => void;
-  onPictureInPicture?: () => void;
   translated?: boolean;
   translating?: boolean;
   translationTarget: string;
@@ -562,12 +561,12 @@ export function NavigationBar(props: NavigationBarProps) {
           <div className="nav-popover-anchor" hidden={!shows('adblock')}>
             <IconButton
               label={adblockActive ? `广告与跟踪拦截已开启${props.blockedCount ? `（已拦截 ${props.blockedCount} 项）` : ''}` : '广告与跟踪拦截已关闭'}
-              active={shieldOpen || props.blockedCount > 0}
+              active={shieldOpen || (adblockActive && props.blockedCount > 0)}
               disabled={!isExternal}
               onClick={() => setShieldOpen((open) => !open)}
             >
               {adblockActive ? <ShieldCheck size={18} /> : <ShieldOff size={18} />}
-              {props.blockedCount > 0 && (
+              {adblockActive && props.blockedCount > 0 && (
                 <span className="shield-badge">{props.blockedCount > 99 ? '99+' : props.blockedCount}</span>
               )}
             </IconButton>
@@ -577,11 +576,27 @@ export function NavigationBar(props: NavigationBarProps) {
                 <div ref={shieldRootRef} className="nav-popover popover" role="dialog" aria-label="广告与跟踪拦截">
                   <div className="nav-popover__title">广告与跟踪拦截</div>
                   <p className="nav-popover__status">
-                    {props.adblockEnabled ? '全局拦截已开启' : '全局拦截已关闭'}
-                    <em>{props.blockedCount ? `本页已拦截 ${props.blockedCount} 项` : '本页暂未拦截请求'}</em>
+                    {!props.adblockEnabled
+                      ? '全局拦截已关闭'
+                      : props.adblockSiteDisabled
+                        ? '已暂停此网站的拦截'
+                        : '此网站的拦截已开启'}
+                    <em>
+                      {props.adblockSiteDisabled
+                        ? '广告与跟踪请求会完整加载'
+                        : props.blockedCount
+                          ? `本页已拦截 ${props.blockedCount} 项`
+                          : '本页暂未拦截请求'}
+                    </em>
                   </p>
-                  <button type="button" className="nav-popover__row" onClick={props.onToggleAdblockSite}>
-                    <span>对此网站启用拦截</span>
+                  <button
+                    type="button"
+                    className="nav-popover__row"
+                    role="switch"
+                    aria-checked={adblockActive}
+                    onClick={props.onToggleAdblockSite}
+                  >
+                    <span>{props.adblockSiteDisabled ? '对此网站启用拦截' : '对此网站暂停拦截'}</span>
                     <span className={`mini-switch ${adblockActive ? 'is-on' : ''}`} aria-hidden="true"><i /></span>
                   </button>
                   <button type="button" className="nav-popover__link" onClick={() => { setShieldOpen(false); props.onOpenAdblockSettings(); }}>
@@ -686,7 +701,6 @@ export function NavigationBar(props: NavigationBarProps) {
           onPrint={props.onPrint}
           onSavePdf={props.onSavePdf}
           onScreenshot={props.onScreenshot ? () => props.onScreenshot?.({ mode: 'save', fullPage: false }) : undefined}
-          onPictureInPicture={props.onPictureInPicture}
           downloadCount={props.downloadCount}
           onSettings={props.onSettings}
         />
