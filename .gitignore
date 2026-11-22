@@ -10,3 +10,4 @@ test-results/
 tsconfig.tsbuildinfo
 luma-src.zip
 .workbuddy-ai/
+.workbuddy/
