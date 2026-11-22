@@ -349,10 +349,22 @@ async function ensureRelease(version, branch, notes) {
   return release;
 }
 
+/** GitHub reports the digest of an uploaded asset; plain REST mirrors may not. */
+function assetDigest(entry) {
+  return typeof entry?.digest === 'string' ? entry.digest.replace(/^sha256:/i, '').toUpperCase() : '';
+}
+
 async function uploadAsset(release, asset) {
   const existing = (release.assets ?? []).find((entry) => entry.name === asset.name);
   if (existing) {
-    log(`Replacing existing asset ${asset.name}.`);
+    // A previous run may have uploaded the file before the connection dropped
+    // while reading it back. If the size and GitHub's own digest agree, there is
+    // nothing to redo -- and re-uploading 120MB is what kept failing.
+    if (existing.size === asset.size && assetDigest(existing) === asset.sha256) {
+      log(`Asset ${asset.name} is already uploaded and matches, skipping.`);
+      return;
+    }
+    log(`Replacing existing asset ${asset.name} (${existing.size}B vs ${asset.size}B).`);
     if (!dryRun) {
       await request(`${API}/repos/${OWNER}/${REPO}/releases/assets/${existing.id}`, { method: 'DELETE' });
     }
@@ -384,6 +396,14 @@ async function verifyAsset(release, asset, attempt = 1) {
   if (!published) throw new Error(`${asset.name} is not listed on the release after upload`);
   if (published.size !== asset.size) {
     warn(`${asset.name}: size ${published.size} != local ${asset.size}`);
+  }
+  // GitHub hashes the upload server-side and reports it, so a full 120MB
+  // download is not needed to trust the file. Only fall back to reading the
+  // bytes back when the API does not expose a digest.
+  const declared = assetDigest(published);
+  if (declared && declared === asset.sha256 && published.size === asset.size) {
+    log(`Verified ${asset.name}: GitHub digest matches, ${published.size} bytes.`);
+    return true;
   }
   const bytes = await downloadBytes(published.url);
   const digest = sha256Of(bytes);
