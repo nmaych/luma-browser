@@ -520,6 +520,7 @@ interface LumaDesktopApi {
   autofillTab: (webContentsId: number, entryId?: string) => Promise<boolean>;
   hasPasswordCredential: (origin: string, username: string, password: string) => Promise<boolean>;
   onMaximizedChange: (callback: (maximized: boolean) => void) => () => void;
+  onFullscreenChange: (callback: (fullscreen: boolean) => void) => () => void;
   onOpenInNewTab: (callback: (url: string) => void) => () => void;
   onShortcut: (callback: (command: string) => void) => () => void;
   onPageContextMenu: (callback: (info: PageContextMenuInfo) => void) => () => void;

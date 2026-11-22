@@ -208,6 +208,11 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
     ipcRenderer.on('window:maximized', listener);
     return () => ipcRenderer.removeListener('window:maximized', listener);
   },
+  onFullscreenChange: (callback) => {
+    const listener = (_event, fullscreen) => callback(Boolean(fullscreen));
+    ipcRenderer.on('window:fullscreen', listener);
+    return () => ipcRenderer.removeListener('window:fullscreen', listener);
+  },
   onOpenInNewTab: (callback) => {
     const listener = (_event, url) => callback(String(url));
     ipcRenderer.on('browser:new-window', listener);

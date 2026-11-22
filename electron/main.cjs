@@ -854,6 +854,19 @@ function createWindow({
   });
   win.setMenuBarVisibility(false);
 
+  /**
+   * Fullscreen is a page mode, not a window mode: the renderer hides the tab
+   * strip and the toolbar so the web page itself fills the screen. It has to
+   * know when the window really changed, which only these events report — the
+   * IPC call returns before Windows finishes the transition.
+   */
+  win.on('enter-full-screen', () => {
+    if (!win.isDestroyed()) win.webContents.send('window:fullscreen', true);
+  });
+  win.on('leave-full-screen', () => {
+    if (!win.isDestroyed()) win.webContents.send('window:fullscreen', false);
+  });
+
   // Web pages may only use http(s) or local files. System pages are never exposed to guests.
   win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     if (!isAllowedContentUrl(params.src)) {
@@ -1784,6 +1797,14 @@ app.on('web-contents-created', (_event, contents) => {
         event.preventDefault();
         hostWindow.setFullScreen(false);
       }
+      // The docked DevTools is a separate webContents: while it holds focus the
+      // chrome renderer never sees the key, so F12 could open the panel but
+      // never close it. Route the binding back to the window that owns it.
+      if (devtoolsHost && !manager.isDestroyed()
+        && shortcutActionForInput(input, appSettings.shortcuts) === 'devtools') {
+        event.preventDefault();
+        manager.send('browser:shortcut', 'devtools');
+      }
     });
 
     if (contents.getType() !== 'webview') return;
@@ -2651,6 +2672,36 @@ ipcMain.handle('passwords:autofill-tab', (_event, webContentsId, entryId) => {
   if (!entry) return false;
   contents.send('luma:autofill', { username: entry.username, password: entry.password });
   return true;
+});
+
+/**
+ * Origin of the frame that sent an IPC message. Autofill never trusts an origin
+ * supplied by the caller: the dropdown asks "what is saved for this page" and
+ * the main process answers for the frame's own URL.
+ */
+function senderOrigin(event) {
+  try {
+    return safeOrigin(event.senderFrame?.url || event.sender.getURL());
+  } catch {
+    return null;
+  }
+}
+
+// Fills the dropdown the guest preload shows above a focused login field. Only
+// account names travel: the password is fetched when a row is picked, so it is
+// never rendered into page-visible DOM.
+ipcMain.handle('passwords:suggest', (event) => {
+  const origin = senderOrigin(event);
+  if (!origin) return [];
+  return passwordVault.listForOrigin(origin).map((entry) => ({ id: entry.id, username: entry.username }));
+});
+
+ipcMain.handle('passwords:fill-entry', (event, entryId) => {
+  const origin = senderOrigin(event);
+  if (!origin || typeof entryId !== 'string') return null;
+  const entry = passwordVault.revealEntry(entryId);
+  if (!entry || entry.origin !== origin) return null;
+  return { username: entry.username, password: entry.password };
 });
 
 function broadcastUpdateState(snapshot) {

@@ -171,6 +171,7 @@ export function App() {
   const [nativeNavigation, setNativeNavigation] = useState<Record<string, NativeNavigationState>>({});
   const [pageContext, setPageContext] = useState<PageContextState | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [devtoolsOpen, setDevtoolsOpen] = useState(false);
   const [tabOverlayOpen, setTabOverlayOpen] = useState(false);
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
@@ -301,6 +302,27 @@ export function App() {
       unsubscribe();
     };
   }, [desktop]);
+
+  // Fullscreen hides the tab strip and the toolbar so the page itself fills the
+  // screen. The state comes from the window's own events: the toggle call
+  // returns before Windows has finished the transition.
+  useEffect(() => {
+    if (!desktop?.onFullscreenChange) return undefined;
+    return desktop.onFullscreenChange(setFullscreen);
+  }, [desktop]);
+
+  // Overlays anchored to the hidden chrome would park the page behind a still
+  // frame that nothing on screen can dismiss any more.
+  const wasFullscreen = useRef(false);
+  useEffect(() => {
+    if (wasFullscreen.current === fullscreen) return;
+    wasFullscreen.current = fullscreen;
+    if (!fullscreen) return;
+    setNavMenuOpen(false);
+    setFindOpen(false);
+    setTabOverviewOpen(false);
+    browser.setActivePanel(null);
+  }, [browser, fullscreen]);
 
   useEffect(() => {
     if (!desktop) return undefined;
@@ -1496,6 +1518,15 @@ export function App() {
       if (event.key === 'F11') {
         event.preventDefault();
         toggleFullscreen();
+      } else if (event.key === 'Escape' && fullscreen) {
+        // Escape leaves fullscreen, but not while it is cancelling a field or
+        // closing a menu that merely happens to be open.
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        const editable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        if (!editable && !target?.closest('.nav-popover, [role="dialog"], .reader-view')) {
+          event.preventDefault();
+          toggleFullscreen();
+        }
       } else if (browser.preferences.shortcuts.devtools && matchShortcutEvent(event, browser.preferences.shortcuts.devtools)) {
         event.preventDefault();
         toggleDevTools();
@@ -1503,7 +1534,7 @@ export function App() {
     };
     window.addEventListener('keydown', handleFunctionKeys, true);
     return () => window.removeEventListener('keydown', handleFunctionKeys, true);
-  }, [browser.preferences.shortcuts.devtools, isDesktop, toggleDevTools, toggleFullscreen]);
+  }, [browser.preferences.shortcuts.devtools, fullscreen, isDesktop, toggleDevTools, toggleFullscreen]);
 
   const openBookmarkDialog = (prefill = false, folderId = '') => {
     const canPrefill = prefill && !getInternalPage(browser.activeEntry.url);
@@ -2089,7 +2120,7 @@ export function App() {
 
   return (
     <div
-      className={`browser-app ${isDesktop ? 'is-desktop' : ''} ${isIncognito ? 'is-incognito' : ''} ${dropTarget ? `is-drop-${dropTarget}` : ''}`}
+      className={`browser-app ${isDesktop ? 'is-desktop' : ''} ${isIncognito ? 'is-incognito' : ''} ${fullscreen ? 'is-fullscreen' : ''} ${dropTarget ? `is-drop-${dropTarget}` : ''}`}
       onDragOver={handleAppDragOver}
       onDragLeave={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null);
