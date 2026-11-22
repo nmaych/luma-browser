@@ -20,6 +20,7 @@ import {
   Printer,
   RefreshCw,
   Scissors,
+  Search,
   ShieldCheck,
   SlidersHorizontal,
   Sun,
@@ -52,6 +53,7 @@ import type { BrowserError, BrowserTab, PermissionPromptRequest, TabEntry } from
 import { parseBookmarksHtml, serializeBookmarksHtml } from '../utils/bookmarkFile';
 import {
   READER_EXTRACT_SCRIPT,
+  TRANSLATION_COLLECT_SCRIPT,
   TRANSLATION_EXTRACT_SCRIPT,
   TRANSLATION_RESTORE_SCRIPT,
   buildTranslationApplyScript,
@@ -591,16 +593,23 @@ export function App() {
         browser.showToast({ tone: 'info', title: '没有找到可翻译的文字' });
         return;
       }
-      const result = await desktop.translatePage(extracted.texts, browser.preferences.translationTarget);
+      const result = await desktop.translatePage(
+        extracted.texts,
+        browser.preferences.translationTarget,
+        browser.preferences.translationProvider,
+        browser.preferences.translationApiKey,
+      );
       if (!result.ok || result.translations.length === 0) {
         browser.showToast({
           tone: 'error',
           title: '网页翻译失败',
           description: result.error === 'same-language'
             ? '这个页面的语言已经是目标语言，无需翻译。'
-            : result.error
-              ? `翻译服务不可用（${result.error}）`
-              : '请检查网络连接后重试。',
+            : result.error === 'deepl key missing'
+              ? '选择的 DeepL 需要 API Key，请到「设置 → 通用 → 翻译与隐私」填写，或把服务改回「自动」。'
+              : result.error
+                ? `翻译服务不可用（${result.error}）。可在设置里换一个翻译服务再试。`
+                : '请检查网络连接后重试。',
         });
         return;
       }
@@ -616,7 +625,7 @@ export function App() {
     } finally {
       setTranslating(false);
     }
-  }, [browser.activeTabId, browser.preferences.translationConsent, browser.preferences.translationTarget, browser.showToast, desktop, showDesktopWeb, translating]);
+  }, [browser.activeTabId, browser.preferences.translationApiKey, browser.preferences.translationConsent, browser.preferences.translationProvider, browser.preferences.translationTarget, browser.showToast, desktop, showDesktopWeb, translating]);
 
   const restoreTranslation = useCallback(async () => {
     const view = webviews.current.get(browser.activeTabId);
@@ -630,6 +639,52 @@ export function App() {
     setTranslated(false);
     browser.showToast({ tone: 'success', title: '已恢复原文' });
   }, [browser.activeTabId, browser.showToast]);
+
+  /**
+   * Keeps a translated page translated: comments, infinite scroll and SPA
+   * routes add text long after the first pass. Polling from the browser side is
+   * cheap because the page reports nothing until it finds new text.
+   */
+  useEffect(() => {
+    if (!translated || !showDesktopWeb || !desktop) return undefined;
+    const view = webviews.current.get(browser.activeTabId);
+    if (!view) return undefined;
+    let cancelled = false;
+    let busy = false;
+    let rounds = 0;
+    const timer = window.setInterval(() => {
+      if (cancelled || busy) return;
+      rounds += 1;
+      // Twenty rounds is roughly a minute; past that the page is idle.
+      if (rounds > 20) {
+        window.clearInterval(timer);
+        return;
+      }
+      busy = true;
+      void (async () => {
+        try {
+          const batch = await view.executeJavaScript<{ ok: boolean; texts: string[]; offset: number }>(TRANSLATION_COLLECT_SCRIPT, true);
+          if (!batch?.ok || batch.texts.length === 0) return;
+          const result = await desktop.translatePage(
+            batch.texts,
+            browser.preferences.translationTarget,
+            browser.preferences.translationProvider,
+            browser.preferences.translationApiKey,
+          );
+          if (!result.ok || result.translations.length === 0) return;
+          await view.executeJavaScript(buildTranslationApplyScript(result.translations, batch.offset), true);
+        } catch {
+          // A page that navigated away simply stops producing batches.
+        } finally {
+          busy = false;
+        }
+      })();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [browser.activeTabId, browser.preferences.translationApiKey, browser.preferences.translationProvider, browser.preferences.translationTarget, desktop, showDesktopWeb, translated]);
 
   const toggleAdblockSite = useCallback(async () => {
     if (!desktop || !activeHost) return;
@@ -1313,6 +1368,17 @@ export function App() {
     setDevtoolsOpen((open) => !open);
   }, [desktop, isExternalPage]);
 
+  /** Page zoom is a preference, so every tab follows the same step. */
+  const changeZoom = useCallback((direction: 1 | -1 | 0) => {
+    const current = browser.preferences.webZoom;
+    const next = direction === 0
+      ? 100
+      : Math.min(200, Math.max(50, current + direction * 10));
+    if (next === current) return;
+    browser.updatePreferences({ webZoom: next });
+    browser.showToast({ tone: 'info', title: direction === 0 ? '缩放已恢复为 100%' : `网页缩放 ${next}%` });
+  }, [browser]);
+
   useEffect(() => {
     if (!isDesktop) return undefined;
     const handleAppShortcut = (event: KeyboardEvent) => {
@@ -1347,11 +1413,20 @@ export function App() {
       } else if (action === 'screenshot') {
         event.preventDefault();
         void captureScreenshot();
+      } else if (action === 'zoom-in') {
+        event.preventDefault();
+        changeZoom(1);
+      } else if (action === 'zoom-out') {
+        event.preventDefault();
+        changeZoom(-1);
+      } else if (action === 'zoom-reset') {
+        event.preventDefault();
+        changeZoom(0);
       }
     };
     window.addEventListener('keydown', handleAppShortcut);
     return () => window.removeEventListener('keydown', handleAppShortcut);
-  }, [browser.preferences.shortcuts, captureScreenshot, desktop, isDesktop, openFind, printActivePage, toggleReader, translatePage]);
+  }, [browser.preferences.shortcuts, captureScreenshot, changeZoom, desktop, isDesktop, openFind, printActivePage, toggleReader, translatePage]);
 
   useEffect(() => {
     if (!desktop?.onPermissionRequest) return undefined;
@@ -1411,9 +1486,12 @@ export function App() {
       else if (command === 'find') openFind();
       else if (command === 'print') void printActivePage();
       else if (command === 'screenshot') void captureScreenshot();
+      else if (command === 'zoom-in') changeZoom(1);
+      else if (command === 'zoom-out') changeZoom(-1);
+      else if (command === 'zoom-reset') changeZoom(0);
       else if (command === 'sleep-tabs') browser.sleepBackgroundTabs();
     });
-  }, [browser, captureScreenshot, desktop, handleBack, handleForward, handleRefresh, openFind, printActivePage, toggleDevTools, toggleReader, translatePage]);
+  }, [browser, captureScreenshot, changeZoom, desktop, handleBack, handleForward, handleRefresh, openFind, printActivePage, toggleDevTools, toggleReader, translatePage]);
 
   useEffect(() => {
     if (!isDesktop) return undefined;
@@ -1665,9 +1743,23 @@ export function App() {
       return;
     }
     if (action === 'selectAll') {
-      const field = document.activeElement;
-      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) field.select();
-      else document.execCommand('selectAll');
+      // Never fall back to document.execCommand('selectAll'): the menu returns
+      // focus to whatever was focused before, and when that is the address bar
+      // the command ends up highlighting the URL instead of the page.
+      const field = internalEditTarget.current?.field;
+      if (field) {
+        field.focus();
+        field.select();
+        return;
+      }
+      const content = document.querySelector('.web-content');
+      if (content) {
+        const range = document.createRange();
+        range.selectNodeContents(content);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
       return;
     }
     document.execCommand(action);
@@ -1754,10 +1846,9 @@ export function App() {
       items.push(
         { id: 'page-print', label: '打印…', icon: <Printer />, shortcut: 'Ctrl+P', onSelect: () => void printActivePage() },
         { id: 'page-save-pdf', label: '另存为 PDF…', icon: <FileDown />, onSelect: () => void saveActivePagePdf() },
-        { id: 'page-capture', label: '保存网页截图…', icon: <Camera />, shortcut: 'Ctrl+Shift+X', onSelect: () => void captureScreenshot() },
-        { id: 'page-capture-region', label: '截取选定区域…', icon: <Camera />, onSelect: () => void captureScreenshot({ selectRegion: true }) },
-        { id: 'page-capture-full', label: '截取整个页面…', icon: <Camera />, onSelect: () => void captureScreenshot({ fullPage: true }) },
-        { id: 'page-capture-copy', label: '复制截图到剪贴板', icon: <Copy />, onSelect: () => void captureScreenshot({ mode: 'copy' }) },
+        // Only the region capture stays on the page menu; the toolbar keeps the
+        // full set, so the menu does not repeat four near-identical entries.
+        { id: 'page-capture-region', label: '截取选定区域…', icon: <Camera />, shortcut: 'Ctrl+Shift+X', onSelect: () => void captureScreenshot({ selectRegion: true }) },
       );
     }
     items.push({ id: 'page-separator-1', separator: true });
@@ -1847,7 +1938,27 @@ export function App() {
         { id: 'page-separator-3', separator: true },
       );
     } else if (pageContext.selectionText) {
+      const selection = pageContext.selectionText.trim();
+      // A URL inside the text is worth opening; anything else is worth
+      // searching, and both actions belong in a new tab.
+      const selectionUrl = /^https?:\/\//i.test(selection) && !/\s/.test(selection)
+        ? selection
+        : (/^[\w-]+(\.[\w-]+)+([/?#]\S*)?$/i.test(selection) ? `https://${selection}` : '');
+      if (selectionUrl) {
+        items.push({
+          id: 'open-selection-tab',
+          label: '在新标签页中打开选中网址',
+          icon: <ExternalLink />,
+          onSelect: () => browser.newTab(selectionUrl),
+        });
+      }
       items.push(
+        {
+          id: 'search-selection-tab',
+          label: `在新标签页中搜索“${selection.length > 18 ? `${selection.slice(0, 18)}…` : selection}”`,
+          icon: <Search />,
+          onSelect: () => browser.newTab(selection),
+        },
         {
           id: 'copy-selection',
           label: '复制选中文字',
@@ -2106,6 +2217,7 @@ export function App() {
           passwordEntries={passwordEntries}
           onFillPassword={(entry) => void fillPassword(entry)}
           onManagePasswords={() => browser.openInternalPage('settings')}
+          buttonVisibility={browser.preferences.addressBarButtons}
         />
         {browser.preferences.showBookmarksBar && (
           <BookmarksBar

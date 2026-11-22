@@ -30,6 +30,20 @@ export const DEFAULT_PREFERENCES: Preferences = {
   autoFillEnabled: true,
   passwordSavingEnabled: true,
   translationTarget: 'zh-CN',
+  translationProvider: 'auto',
+  translationApiKey: '',
+  addressBarButtons: {
+    reader: true,
+    translate: true,
+    screenshot: true,
+    adblock: true,
+    passwords: true,
+    bookmarks: true,
+    history: true,
+    downloads: true,
+    extensions: true,
+    settings: true,
+  },
 };
 
 export function createNewTab(url = INTERNAL_ROUTES.newtab, title = '新标签页'): BrowserTab {

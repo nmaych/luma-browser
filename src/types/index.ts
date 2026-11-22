@@ -113,6 +113,21 @@ export interface PermissionPromptRequest {
   title: string;
 }
 
+/** Right-side address bar buttons the user can hide from settings. */
+export type AddressBarButton =
+  | 'reader'
+  | 'translate'
+  | 'screenshot'
+  | 'adblock'
+  | 'passwords'
+  | 'bookmarks'
+  | 'history'
+  | 'downloads'
+  | 'extensions'
+  | 'settings';
+
+export type TranslationProvider = 'auto' | 'deepl' | 'google' | 'mymemory';
+
 export interface Preferences {
   theme: ThemePreference;
   searchEngine: SearchEngine;
@@ -154,6 +169,12 @@ export interface Preferences {
   passwordSavingEnabled: boolean;
   /** Target language for the built-in page translator. */
   translationTarget: string;
+  /** Which translation backend to prefer; `auto` tries DeepL, Google, MyMemory. */
+  translationProvider: TranslationProvider;
+  /** Optional DeepL API key (free keys end with `:fx`); empty disables DeepL. */
+  translationApiKey: string;
+  /** Visibility of each address-bar action; missing entries fall back to visible. */
+  addressBarButtons: Record<AddressBarButton, boolean>;
 }
 
 export interface ToastMessage {

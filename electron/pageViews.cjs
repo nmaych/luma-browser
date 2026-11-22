@@ -148,6 +148,10 @@ function createPageViewManager({ partition, preloadPath, onEvent, onCreated }) {
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
+        // Keep V8's compiled-code cache between visits and skip inline spell
+        // checking, which every keystroke in a text field would otherwise pay.
+        v8CacheOptions: 'code',
+        spellcheck: false,
       },
     });
     view.setBackgroundColor('#ffffff');

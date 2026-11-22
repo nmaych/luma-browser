@@ -46,6 +46,17 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   openExtensionsFolder: () => ipcRenderer.invoke('extensions:open-folder'),
   openExtensionPopup: (id, anchor) => ipcRenderer.invoke('extensions:popup', id, anchor),
   openExtensionPage: (id, page) => ipcRenderer.invoke('extensions:open-page', id, page),
+  listUserscripts: () => ipcRenderer.invoke('userscripts:list'),
+  installUserscript: (sourcePath) => ipcRenderer.invoke('userscripts:install', sourcePath),
+  setUserscriptEnabled: (id, enabled) => ipcRenderer.invoke('userscripts:set-enabled', id, enabled),
+  removeUserscript: (id) => ipcRenderer.invoke('userscripts:remove', id),
+  reloadUserscripts: () => ipcRenderer.invoke('userscripts:reload'),
+  openUserscriptsFolder: () => ipcRenderer.invoke('userscripts:open-folder'),
+  onUserscriptsChanged: (callback) => {
+    const listener = (_event, list) => callback(list);
+    ipcRenderer.on('userscripts:changed', listener);
+    return () => ipcRenderer.removeListener('userscripts:changed', listener);
+  },
   togglePictureInPicture: (tabId, incognito) => ipcRenderer.invoke('page:picture-in-picture', tabId, incognito),
   onOpenUrl: (callback) => {
     const listener = (_event, url) => callback(url);
@@ -182,7 +193,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   setAdblockEnabled: (enabled) => ipcRenderer.invoke('adblock:set-enabled', enabled),
   setAdblockSite: (host, disabled) => ipcRenderer.invoke('adblock:set-site', host, disabled),
   updateAdblock: () => ipcRenderer.invoke('adblock:update'),
-  translatePage: (texts, target) => ipcRenderer.invoke('page:translate', texts, target),
+  translatePage: (texts, target, provider, apiKey) => ipcRenderer.invoke('page:translate', texts, target, provider, apiKey),
   getPasswordStatus: () => ipcRenderer.invoke('passwords:status'),
   listPasswords: () => ipcRenderer.invoke('passwords:list'),
   savePassword: (origin, username, password) => ipcRenderer.invoke('passwords:save', origin, username, password),

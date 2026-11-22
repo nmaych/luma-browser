@@ -173,6 +173,29 @@ interface LumaExtensionResult {
   list: LumaExtension[];
 }
 
+/** A `.user.js` file Luma runs itself, since Electron has no chrome.userScripts. */
+interface LumaUserscript {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  matches: string[];
+  includes: string[];
+  runAt: string;
+  grants: string[];
+  enabled: boolean;
+  size: number;
+  updatedAt: number;
+}
+
+interface LumaUserscriptResult {
+  ok: boolean;
+  error?: string;
+  cancelled?: boolean;
+  installed?: number;
+  list: LumaUserscript[];
+}
+
 interface LumaAppPaths {  install: string;
   userData: string;
   update: string;
@@ -238,6 +261,8 @@ interface LumaTranslationResult {
   ok: boolean;
   translations: string[];
   error?: string;
+  /** Provider that actually answered: microsoft / google / mymemory. */
+  provider?: string;
 }
 
 interface LumaDownloadDirectoryInfo {
@@ -319,6 +344,13 @@ interface LumaDesktopApi {
     anchor: { x: number; y: number; width: number; height: number },
   ) => Promise<{ ok: boolean; error?: string; closed?: boolean; opened?: boolean }>;
   openExtensionPage: (id: string, page?: string) => Promise<{ ok: boolean; error?: string; url?: string }>;
+  listUserscripts: () => Promise<LumaUserscript[]>;
+  installUserscript: (sourcePath?: string) => Promise<LumaUserscriptResult>;
+  setUserscriptEnabled: (id: string, enabled: boolean) => Promise<LumaUserscriptResult>;
+  removeUserscript: (id: string) => Promise<LumaUserscriptResult>;
+  reloadUserscripts: () => Promise<LumaUserscriptResult>;
+  openUserscriptsFolder: () => Promise<boolean>;
+  onUserscriptsChanged: (callback: (list: LumaUserscript[]) => void) => () => void;
   closeExtensionPopup: () => Promise<boolean>;
   onOpenUrl: (callback: (url: string) => void) => () => void;
   togglePictureInPicture: (
@@ -473,7 +505,7 @@ interface LumaDesktopApi {
   setAdblockEnabled: (enabled: boolean) => Promise<LumaAdblockState>;
   setAdblockSite: (host: string, disabled: boolean) => Promise<LumaAdblockState>;
   updateAdblock: () => Promise<LumaAdblockState>;
-  translatePage: (texts: string[], target: string) => Promise<LumaTranslationResult>;
+  translatePage: (texts: string[], target: string, provider?: string, apiKey?: string) => Promise<LumaTranslationResult>;
   getPasswordStatus: () => Promise<LumaPasswordStatus>;
   listPasswords: () => Promise<LumaPasswordMeta[]>;
   savePassword: (

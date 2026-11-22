@@ -573,6 +573,9 @@
 .settings-select { height: 34px; min-width: 118px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 9px; outline: 0; background: var(--surface); font-size: 12px; }
 .settings-select--wide { min-width: 190px; }
 .settings-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.settings-input { height: 34px; min-width: 200px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 9px; outline: 0; background: var(--surface); color: var(--text); font-size: 12px; }
+.settings-input--wide { min-width: 250px; }
+.settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .zoom-control { display: flex; align-items: center; gap: 10px; }
 .zoom-control input[type='range'] { width: 150px; accent-color: var(--accent); }
 .zoom-control strong { min-width: 41px; color: var(--text); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }

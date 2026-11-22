@@ -17,7 +17,10 @@ export type ShortcutAction =
   | 'reader'
   | 'translate'
   | 'screenshot'
-  | 'sleep-tabs';
+  | 'sleep-tabs'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'zoom-reset';
 
 export interface ShortcutItem {
   action: ShortcutAction;
@@ -52,6 +55,9 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, string> = {
   translate: 'Ctrl+Shift+Y',
   screenshot: 'Ctrl+Shift+X',
   'sleep-tabs': 'Ctrl+Shift+S',
+  'zoom-in': 'Ctrl+=',
+  'zoom-out': 'Ctrl+-',
+  'zoom-reset': 'Ctrl+0',
 };
 
 export const SHORTCUT_ACTION_LABELS: Record<ShortcutAction, string> = {
@@ -74,6 +80,9 @@ export const SHORTCUT_ACTION_LABELS: Record<ShortcutAction, string> = {
   translate: '网页翻译',
   screenshot: '网页截图',
   'sleep-tabs': '立即休眠后台标签页',
+  'zoom-in': '放大网页',
+  'zoom-out': '缩小网页',
+  'zoom-reset': '恢复 100%',
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
@@ -97,6 +106,9 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { action: 'back', label: '后退' },
       { action: 'forward', label: '前进' },
       { action: 'find', label: '在页面中查找' },
+      { action: 'zoom-in', label: '放大网页' },
+      { action: 'zoom-out', label: '缩小网页' },
+      { action: 'zoom-reset', label: '恢复 100%' },
       { action: 'print', label: '打印 / 另存为 PDF' },
     ],
   },

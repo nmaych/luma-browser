@@ -68,6 +68,14 @@ export function getCachedFavicon(url?: string): string | undefined {
   return cache()[origin]?.icon;
 }
 
+/** When the cached icon was stored; null when this origin has no entry. */
+export function getFaviconAge(url?: string): number | null {
+  const origin = url ? faviconOrigin(url) : null;
+  if (!origin) return null;
+  const entry = cache()[origin];
+  return entry ? entry.savedAt : null;
+}
+
 /** Stores an already-resolved icon (usually straight from the live page). */
 export function rememberFavicon(url: string, icon?: string | null): boolean {
   const origin = faviconOrigin(url);
@@ -113,8 +121,22 @@ export async function resolveFavicon(url: string, candidate?: string): Promise<s
   if (!origin) return undefined;
   const cached = cache()[origin]?.icon;
   if (cached) return cached;
+  return downloadForOrigin(origin, url, candidate);
+}
+
+/**
+ * Ignores the cache and fetches the icon again. Used by the once-per-launch
+ * bookmark check, which has to notice a site that redesigned its icon.
+ */
+export async function refreshFavicon(url: string, candidate?: string): Promise<string | undefined> {
+  const origin = faviconOrigin(url);
+  if (!origin) return undefined;
+  return downloadForOrigin(origin, url, candidate, true);
+}
+
+function downloadForOrigin(origin: string, url: string, candidate?: string, force = false) {
   const running = pending.get(origin);
-  if (running) return running;
+  if (running && !force) return running;
 
   const task = (async () => {
     const sources = [candidate, `${origin}/favicon.ico`]
@@ -131,9 +153,8 @@ export async function resolveFavicon(url: string, candidate?: string): Promise<s
   })();
 
   pending.set(origin, task);
-  try {
-    return await task;
-  } finally {
-    pending.delete(origin);
-  }
+  void task.finally(() => {
+    if (pending.get(origin) === task) pending.delete(origin);
+  });
+  return task;
 }

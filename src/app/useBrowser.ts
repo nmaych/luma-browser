@@ -16,7 +16,7 @@ import type {
   ToastMessage,
 } from '../types';
 import { createId, readStorage, writeStorage } from '../utils/storage';
-import { getCachedFavicon, faviconOrigin, rememberFavicon, resolveFavicon } from '../utils/faviconCache';
+import { getCachedFavicon, getFaviconAge, faviconOrigin, rememberFavicon, refreshFavicon, resolveFavicon } from '../utils/faviconCache';
 import type { ImportedBookmarkData } from '../utils/bookmarkFile';
 import { matchShortcutEvent } from '../utils/shortcuts';
 import { INTERNAL_ROUTES, INTERNAL_TITLES, getDefaultFavicon, isExternalUrl, parseBrowserInput } from '../utils/url';
@@ -145,10 +145,24 @@ export function useBrowser(options: UseBrowserOptions = {}) {
   const [preferences, setPreferences] = useState<Preferences>(() => {
     const saved = readStorage<Partial<Preferences>>(STORAGE_KEYS.preferences, {});
     const customSearchEngines = sanitizeCustomEngines(saved.customSearchEngines);
+    // A stored blob may predate a button; only the known keys survive, and a
+    // missing key keeps its default (visible).
+    const addressBarButtons = { ...DEFAULT_PREFERENCES.addressBarButtons };
+    if (saved.addressBarButtons && typeof saved.addressBarButtons === 'object') {
+      for (const key of Object.keys(addressBarButtons) as (keyof typeof addressBarButtons)[]) {
+        const value = (saved.addressBarButtons as Record<string, unknown>)[key];
+        if (typeof value === 'boolean') addressBarButtons[key] = value;
+      }
+    }
     return {
       ...DEFAULT_PREFERENCES,
       ...saved,
       customSearchEngines,
+      addressBarButtons,
+      translationProvider: ['auto', 'deepl', 'google', 'mymemory'].includes(String(saved.translationProvider))
+        ? saved.translationProvider as Preferences['translationProvider']
+        : DEFAULT_PREFERENCES.translationProvider,
+      translationApiKey: typeof saved.translationApiKey === 'string' ? saved.translationApiKey.slice(0, 200) : '',
       shortcuts: sanitizeShortcuts(saved.shortcuts),
       bossKey: typeof saved.bossKey === 'string' && saved.bossKey.trim()
         ? saved.bossKey
@@ -209,28 +223,53 @@ export function useBrowser(options: UseBrowserOptions = {}) {
   }, []);
 
   /**
-   * Fills bookmark icons from the local icon cache. Each site icon is fetched at
-   * most once per profile, then rendered straight from storage on later visits.
+   * Checks bookmark icons once per launch. An icon is refreshed when it is
+   * missing, older than a week, or a data URL that no longer decodes (a broken
+   * snapshot saved by an older build). Everything else is left alone so the
+   * check costs no network on a healthy profile.
    */
   const refreshBookmarkIcons = useCallback(async (items: Bookmark[]) => {
     if (isIncognito || !window.lumaDesktop?.isDesktop) return;
-    const queue: Bookmark[] = [];
+    const ICON_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+    const decodes = (source: string) => new Promise<boolean>((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(true);
+      image.onerror = () => resolve(false);
+      image.src = source;
+    });
+
+    const queue: { bookmark: Bookmark; force: boolean }[] = [];
     for (const item of items) {
-      if (item.favicon?.startsWith('data:')) continue;
       const origin = faviconOrigin(item.url);
       if (!origin || requestedFavicons.current.has(origin)) continue;
       requestedFavicons.current.add(origin);
-      queue.push(item);
+      const hasIcon = Boolean(item.favicon?.startsWith('data:'));
+      if (!hasIcon) {
+        queue.push({ bookmark: item, force: false });
+        continue;
+      }
+      const age = getFaviconAge(item.url);
+      const stale = age === null || Date.now() - age > ICON_MAX_AGE;
+      if (stale) {
+        queue.push({ bookmark: item, force: true });
+        continue;
+      }
+      if (!(await decodes(item.favicon as string))) queue.push({ bookmark: item, force: true });
     }
+
     for (let index = 0; index < queue.length; index += 4) {
       const chunk = queue.slice(index, index + 4);
       const icons = await Promise.all(
-        chunk.map((item) => resolveFavicon(item.url, item.favicon).catch(() => undefined)),
+        chunk.map(({ bookmark, force }) => (
+          force
+            ? refreshFavicon(bookmark.url, bookmark.favicon).catch(() => undefined)
+            : resolveFavicon(bookmark.url, bookmark.favicon).catch(() => undefined)
+        )),
       );
       const resolved = new Map<string, string>();
-      chunk.forEach((item, position) => {
+      chunk.forEach(({ bookmark }, position) => {
         const icon = icons[position];
-        if (icon) resolved.set(item.url, icon);
+        if (icon) resolved.set(bookmark.url, icon);
       });
       if (resolved.size === 0) continue;
       setBookmarks((current) => {

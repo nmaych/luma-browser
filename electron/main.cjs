@@ -10,6 +10,7 @@ const { configureUserData } = require('./appPaths.cjs');
 const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
 const { configureSession } = require('./main/sessionPolicy.cjs');
 const { createExtensionManager } = require('./extensions.cjs');
+const { createUserscriptManager } = require('./main/userscripts.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
 const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
@@ -50,6 +51,9 @@ const DEFAULT_SHORTCUTS = {
   translate: 'Ctrl+Shift+Y',
   screenshot: 'Ctrl+Shift+X',
   'sleep-tabs': 'Ctrl+Shift+S',
+  'zoom-in': 'Ctrl+=',
+  'zoom-out': 'Ctrl+-',
+  'zoom-reset': 'Ctrl+0',
 };
 
 const DEFAULT_APP_SETTINGS = {
@@ -65,6 +69,11 @@ const DEFAULT_APP_SETTINGS = {
 // the gigabytes. Chrome keeps it around 320 MB; 256 MB is the same order of
 // magnitude and still caches a working set of sites.
 app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
+// Web pages get the two Chromium features that make repeat navigation feel
+// instant: the back/forward cache keeps a visited page alive instead of
+// reloading it, and the code cache spares re-parsing a site's JavaScript on
+// every visit. Both are off in an embedded Chromium unless asked for.
+app.commandLine.appendSwitch('enable-features', 'BackForwardCache,ParallelDownloading');
 // Chromium's renderer sandbox for every process, including the UI renderer.
 // Page views already opt in per view; enabling it app-wide closes the gap.
 app.enableSandbox();
@@ -336,6 +345,8 @@ let memoryPressureTimer = null;
 let lastMemoryPressureAt = 0;
 /** @type {ReturnType<typeof createExtensionManager> | null} */
 let extensionManager = null;
+/** @type {ReturnType<typeof createUserscriptManager> | null} */
+let userscriptManager = null;
 /** Extensions follow the profile: an isolated --user-data-dir gets its own set. */
 let extensionsDirectory = null;
 /** Floating host window for `chrome.action.default_popup`. */
@@ -1413,6 +1424,26 @@ function openDownloadsWindow() {
   return downloadsWindow;
 }
 
+/**
+ * Runs every enabled userscript that matches the page's URL. The wrapper is
+ * evaluated in the page's main world, which is where userscripts expect to be;
+ * errors inside a script are caught by the wrapper itself.
+ */
+function injectUserscripts(contents) {
+  const manager = userscriptManager;
+  if (!manager || !manager.count || contents.isDestroyed()) return;
+  // Incognito keeps no profile data, and a userscript that persists GM values
+  // would write to the page's local storage there; skip it like extensions.
+  if (incognitoSession && contents.session === incognitoSession) return;
+  const url = contents.getURL();
+  if (!url || !/^https?:/i.test(url)) return;
+  for (const script of manager.injectionsFor(url)) {
+    void contents.executeJavaScript(script.code, false).catch((error) => {
+      console.error(`[userscripts] injection failed for ${script.id}:`, error);
+    });
+  }
+}
+
 function attachPageFeatures(contents, { native = false } = {}) {
   if (!contents || contents.isDestroyed()) return;
   if (!native) {
@@ -1455,7 +1486,10 @@ function attachPageFeatures(contents, { native = false } = {}) {
 
   // Cosmetic rules are applied after the document exists. The CSS is
   // inserted by the browser, so page scripts cannot remove or hook it.
-  contents.on('dom-ready', () => applyCosmeticFilters(contents));
+  contents.on('dom-ready', () => {
+    applyCosmeticFilters(contents);
+    injectUserscripts(contents);
+  });
   contents.on('render-process-gone', (_event, details) => {
     hostContentsOf(contents)?.send('browser:render-gone', {
       webContentsId: contents.id,
@@ -1615,6 +1649,19 @@ app.whenReady().then(() => {
   void extensionManager.loadAll().catch((error) => {
     console.error('[extensions] load failed:', error);
   });
+  // Electron has no chrome.userScripts, so Tampermonkey's MV3 scripts never
+  // run. Luma injects .user.js files itself; the manager only parses and
+  // matches, injection happens per document in attachPageFeatures.
+  userscriptManager = createUserscriptManager({
+    directory: path.join(app.getPath('userData'), 'Userscripts'),
+    log: (line) => console.log(line),
+    onChange: (list) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('userscripts:changed', list);
+      }
+    },
+  });
+  userscriptManager.scan();
   loadPersistedDownloads();
   // Loading the cached engine is cheap; a stale/missing cache refreshes in the
   // background so the first window opens immediately.
@@ -2261,24 +2308,57 @@ ipcMain.handle('page:picture-in-picture', async (_event, tabId, incognito) => {
   const manager = pageViewsFor(Boolean(incognito));
   const entry = manager.webContents.find((item) => item.tabId === tabId);
   if (!entry) return { ok: false, error: '这个标签页还没有加载页面' };
-  try {
-    const result = await entry.webContents.executeJavaScript(`(async () => {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-        return { state: 'closed' };
+  const contents = entry.webContents;
+  // Video players are often in a frame (embedded players, some news sites), and
+  // a frame is invisible from the top document. Run the probe in each frame.
+  const PIP_PROBE = `(async () => {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+      return { state: 'closed' };
+    }
+    if (document.pictureInPictureEnabled === false) return { state: 'unsupported' };
+    const videos = [...document.querySelectorAll('video')]
+      .filter((video) => !video.disablePictureInPicture && (video.currentSrc || video.src))
+      .sort((left, right) => (right.clientWidth * right.clientHeight) - (left.clientWidth * left.clientHeight));
+    if (videos.length === 0) return { state: 'no-video' };
+    let lastError = '';
+    for (const video of videos.slice(0, 6)) {
+      try {
+        await video.requestPictureInPicture();
+        return { state: 'opened' };
+      } catch (error) {
+        lastError = (error && (error.name + ': ' + error.message)) || String(error);
       }
-      if (document.pictureInPictureEnabled === false) return { state: 'unsupported' };
-      const videos = [...document.querySelectorAll('video')].filter((video) => video.readyState > 0);
-      if (videos.length === 0) return { state: 'no-video' };
-      // Largest visible video wins: that is the one the user is watching.
-      videos.sort((left, right) => (right.clientWidth * right.clientHeight) - (left.clientWidth * left.clientHeight));
-      await videos[0].requestPictureInPicture();
-      return { state: 'opened' };
-    })()`, true);
-    return { ok: true, ...(result ?? {}) };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : '无法进入画中画' };
+    }
+    return { state: 'failed', error: lastError };
+  })()`;
+
+  const frames = [];
+  try {
+    const main = contents.mainFrame;
+    frames.push(main);
+    for (const frame of main.framesInSubtree ?? []) {
+      if (frame !== main) frames.push(frame);
+    }
+  } catch {
+    // A page without a live frame tree has nothing to show.
   }
+
+  let lastError = '';
+  for (const frame of frames) {
+    try {
+      const result = await frame.executeJavaScript(PIP_PROBE, true);
+      if (!result) continue;
+      if (result.state === 'opened' || result.state === 'closed' || result.state === 'unsupported') {
+        return { ok: true, ...result };
+      }
+      if (result.state === 'failed') lastError = result.error || lastError;
+    } catch {
+      // A detached or sandboxed frame cannot be scripted; try the next one.
+    }
+  }
+  if (lastError) return { ok: false, error: lastError };
+  return { ok: true, state: 'no-video' };
 });
 
 ipcMain.handle('page-view:ensure', (event, tabId, url, incognito) => {
@@ -2435,9 +2515,14 @@ ipcMain.handle('adblock:set-site', (_event, host, disabled) => {
   return adblockOverview();
 });
 
-ipcMain.handle('page:translate', (_event, texts, target) => {
+ipcMain.handle('page:translate', (_event, texts, target, provider, apiKey) => {
   if (!Array.isArray(texts)) return { ok: false, error: 'invalid-texts', translations: [] };
-  return translateTexts(texts, typeof target === 'string' ? target : 'zh-CN');
+  return translateTexts(
+    texts,
+    typeof target === 'string' ? target : 'zh-CN',
+    typeof provider === 'string' ? provider : 'auto',
+    typeof apiKey === 'string' ? apiKey : '',
+  );
 });
 
 ipcMain.handle('passwords:status', () => ({
@@ -2708,6 +2793,91 @@ async function openExtensionPopup(extensionId, anchor) {
 }
 
 ipcMain.handle('extensions:list', () => extensionManager?.list() ?? []);
+ipcMain.handle('userscripts:list', () => userscriptManager?.list() ?? []);
+ipcMain.handle('userscripts:install', async (event, sourcePath) => {
+  if (!userscriptManager) return { ok: false, error: '用户脚本管理器尚未就绪', list: [] };
+  let source = typeof sourcePath === 'string' && sourcePath ? sourcePath : '';
+  if (!source) {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择用户脚本（.user.js）',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '用户脚本', extensions: ['js'] }],
+      buttonLabel: '安装脚本',
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, cancelled: true, list: userscriptManager.list() };
+    }
+    let installed = 0;
+    let lastError = '';
+    for (const file of result.filePaths) {
+      const outcome = userscriptManager.install(file);
+      if (outcome.ok) installed += 1;
+      else lastError = outcome.error || lastError;
+    }
+    return {
+      ok: installed > 0,
+      installed,
+      error: installed === 0 ? lastError : '',
+      list: userscriptManager.list(),
+    };
+  }
+  const outcome = userscriptManager.install(source);
+  return { ...outcome, list: userscriptManager.list() };
+});
+ipcMain.handle('userscripts:set-enabled', (_event, id, enabled) => (
+  userscriptManager?.setEnabled(id, enabled) ?? { ok: false, list: [] }
+));
+ipcMain.handle('userscripts:remove', (_event, id) => (
+  userscriptManager?.remove(id) ?? { ok: false, list: [] }
+));
+ipcMain.handle('userscripts:reload', () => {
+  userscriptManager?.scan();
+  return { ok: true, list: userscriptManager?.list() ?? [] };
+});
+ipcMain.handle('userscripts:open-folder', async () => {
+  const directory = userscriptManager?.directory;
+  if (!directory) return false;
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+  } catch {
+    // shell.openPath reports the failure below.
+  }
+  const error = await shell.openPath(directory);
+  return !error;
+});
+// GM_xmlhttpRequest from a userscript: the page posts to the preload, the
+// preload asks here, and the reply goes back the same way. Only http(s).
+ipcMain.handle('userscripts:request', async (_event, details) => {
+  const url = typeof details?.url === 'string' ? details.url : '';
+  if (!/^https?:\/\//i.test(url)) return { error: 'only http(s) URLs are allowed' };
+  const method = typeof details?.method === 'string' ? details.method.toUpperCase() : 'GET';
+  const headers = {};
+  if (details?.headers && typeof details.headers === 'object') {
+    for (const [key, value] of Object.entries(details.headers)) {
+      if (typeof key === 'string' && typeof value === 'string' && key.length < 100 && !/[\r\n]/.test(key + value)) {
+        headers[key] = value;
+      }
+    }
+  }
+  try {
+    const response = await net.fetch(url, {
+      method,
+      headers,
+      body: typeof details?.data === 'string' ? details.data : undefined,
+    });
+    const text = (await response.text()).slice(0, 5 * 1024 * 1024);
+    const replyHeaders = [...response.headers.entries()].map(([key, value]) => `${key}: ${value}`).join('\r\n');
+    return { status: response.status, statusText: response.statusText, headers: replyHeaders, text, url: response.url };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'request failed' };
+  }
+});
+ipcMain.on('userscripts:open', (event, url) => {
+  if (typeof url !== 'string' || !isSafeHttpUrl(url)) return;
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  win?.webContents.send('browser:new-window', url);
+});
 ipcMain.handle('extensions:install', async (event, sourcePath) => {
   if (!extensionManager) return { ok: false, error: '扩展管理器尚未就绪', list: [] };
   let source = typeof sourcePath === 'string' && sourcePath ? sourcePath : '';

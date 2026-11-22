@@ -221,18 +221,18 @@ function extractTranslatableBlocks() {
   scope.__lumaTranslateNodes = [];
   scope.__lumaTranslateOriginal = [];
 
-  const skipSelector = 'script,style,noscript,textarea,input,select,option,code,pre,kbd,samp,svg,canvas,[contenteditable="true"],[aria-hidden="true"]';
+  const skipSelector = 'script,style,noscript,textarea,input,select,option,code,pre,kbd,samp,svg,canvas,[contenteditable="true"],[aria-hidden="true"],.notranslate,[translate="no"]';
   const nodes: Text[] = [];
   const texts: string[] = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let current = walker.nextNode();
-  while (current && texts.length < 160) {
+  while (current && texts.length < 320) {
     const textNode = current as Text;
     const parent = textNode.parentElement;
     current = walker.nextNode();
     if (!parent || parent.closest(skipSelector)) continue;
     const text = (textNode.nodeValue || '').trim().replace(/\s+/g, ' ');
-    if (text.length < 2 || text.length > 1500) continue;
+    if (text.length < 2 || text.length > 2500) continue;
     if (!/[\p{L}\p{N}]/u.test(text)) continue;
     nodes.push(textNode);
     texts.push(text);
@@ -244,15 +244,57 @@ function extractTranslatableBlocks() {
 
 export const TRANSLATION_EXTRACT_SCRIPT = `(${extractTranslatableBlocks.toString()})()`;
 
-export function buildTranslationApplyScript(translations: string[]): string {
+/**
+ * Pages keep rendering after the first pass (infinite scroll, comments, SPA
+ * routes). This picks up text nodes that were not translated yet and reports
+ * the offset they start at, so the apply step stays aligned.
+ */
+function collectUntranslatedBlocks() {
+  const scope = window as unknown as {
+    __lumaTranslateNodes?: Text[];
+    __lumaTranslateOriginal?: string[];
+  };
+  const known = Array.isArray(scope.__lumaTranslateNodes) ? scope.__lumaTranslateNodes : [];
+  const knownOriginals = Array.isArray(scope.__lumaTranslateOriginal) ? scope.__lumaTranslateOriginal : [];
+  const seen = new Set(known);
+  const skipSelector = 'script,style,noscript,textarea,input,select,option,code,pre,kbd,samp,svg,canvas,[contenteditable="true"],[aria-hidden="true"],.notranslate,[translate="no"]';
+  const nodes: Text[] = [];
+  const texts: string[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let current = walker.nextNode();
+  while (current && texts.length < 120) {
+    const textNode = current as Text;
+    const parent = textNode.parentElement;
+    current = walker.nextNode();
+    if (!parent || parent.closest(skipSelector) || seen.has(textNode)) continue;
+    // A node the page removed must not be reported again.
+    if (!textNode.isConnected) continue;
+    const text = (textNode.nodeValue || '').trim().replace(/\s+/g, ' ');
+    if (text.length < 2 || text.length > 2000) continue;
+    if (!/[\p{L}\p{N}]/u.test(text)) continue;
+    nodes.push(textNode);
+    texts.push(text);
+  }
+  if (texts.length === 0) return { ok: false, texts: [], offset: known.length };
+  scope.__lumaTranslateNodes = known.concat(nodes);
+  scope.__lumaTranslateOriginal = knownOriginals.concat(nodes.map((node) => node.nodeValue || ''));
+  return { ok: true, texts, offset: known.length };
+}
+
+export const TRANSLATION_COLLECT_SCRIPT = `(${collectUntranslatedBlocks.toString()})()`;
+
+export function buildTranslationApplyScript(translations: string[], offset = 0): string {
   return `(() => {
     const nodes = window.__lumaTranslateNodes || [];
     const originals = window.__lumaTranslateOriginal || [];
+    const base = ${Number.isFinite(offset) ? Math.max(0, Math.round(offset)) : 0};
     const values = ${JSON.stringify(translations)};
     let changed = 0;
     nodes.forEach((node, index) => {
+      const target = index - base;
+      if (target < 0 || target >= values.length) return;
       const original = originals[index];
-      const text = values[index];
+      const text = values[target];
       if (!node || !node.isConnected || typeof text !== 'string' || !text.trim()) return;
       const leading = typeof original === 'string' ? (original.match(/^\\s*/) || [''])[0] : '';
       const trailing = typeof original === 'string' ? (original.match(/\\s*$/) || [''])[0] : '';

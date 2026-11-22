@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Camera, Clock3, Download, History, Home, KeyRound, Languages, LockKeyhole, Newspaper, RotateCw, Search, Settings2, ShieldCheck, ShieldOff, Star, TriangleAlert, X } from 'lucide-react';
-import type { BrowserTab, CustomSearchEngine, HistoryItem, SearchEngine, TabEntry } from '../../types';
+import type { AddressBarButton, BrowserTab, CustomSearchEngine, HistoryItem, SearchEngine, TabEntry } from '../../types';
 import { displayUrl, getHost, getInternalPage, isExternalUrl, parseBrowserInput } from '../../utils/url';
 import { getSearchEngine } from '../../data/searchEngines';
 import { formatHistoryDate, formatTime } from '../../utils/date';
@@ -91,6 +91,8 @@ interface NavigationBarProps {
   passwordEntries: LumaPasswordAccount[];
   onFillPassword: (entry: LumaPasswordAccount) => void;
   onManagePasswords: () => void;
+  /** Which right-side buttons are shown; a missing key means visible. */
+  buttonVisibility?: Partial<Record<AddressBarButton, boolean>>;
 }
 
 export function NavigationBar(props: NavigationBarProps) {
@@ -107,6 +109,9 @@ export function NavigationBar(props: NavigationBarProps) {
   const isExternal = isExternalUrl(props.entry.url);
   const adblockActive = props.adblockEnabled && !props.adblockSiteDisabled;
   const recentPages = (props.recentPages ?? []).slice(0, 8);
+  const shows = (button: AddressBarButton) => props.buttonVisibility?.[button] !== false;
+  /** A click that focuses the field must also select it; mouseup would undo that. */
+  const selectOnMouseUp = useRef(false);
 
   // The page is a native view above the HTML layer, so any popover has to make
   // the page step aside while it is open.
@@ -330,6 +335,15 @@ export function NavigationBar(props: NavigationBarProps) {
             aria-label="地址和搜索栏"
             value={address}
             onChange={(event) => setAddress(event.target.value)}
+            onMouseDown={(event) => {
+              if (document.activeElement !== event.currentTarget) selectOnMouseUp.current = true;
+            }}
+            onMouseUp={(event) => {
+              if (!selectOnMouseUp.current) return;
+              selectOnMouseUp.current = false;
+              event.preventDefault();
+              event.currentTarget.select();
+            }}
             onFocus={(event) => {
               setIsFocused(true);
               // Editing needs the scheme, and it is also the only way to notice
@@ -423,7 +437,7 @@ export function NavigationBar(props: NavigationBarProps) {
         </form>
 
         <div className="navigation-actions desktop-navigation">
-          {props.onToggleReader && (
+          {props.onToggleReader && shows('reader') && (
             <IconButton
               label={props.readerActive ? '退出阅读模式' : '阅读模式 (Ctrl+Shift+R)'}
               active={props.readerActive}
@@ -433,7 +447,7 @@ export function NavigationBar(props: NavigationBarProps) {
               <Newspaper size={18} />
             </IconButton>
           )}
-          <div className="nav-popover-anchor">
+          <div className="nav-popover-anchor" hidden={!shows('translate')}>
             <IconButton
               label="网页翻译 (Ctrl+Shift+Y)"
               active={translateOpen || props.translated}
@@ -482,7 +496,7 @@ export function NavigationBar(props: NavigationBarProps) {
             )}
           </div>
           {props.onScreenshot && (
-            <div className="nav-popover-anchor">
+            <div className="nav-popover-anchor" hidden={!shows('screenshot')}>
               <IconButton
                 label="网页截图 (Ctrl+Shift+X)"
                 active={screenshotOpen}
@@ -545,7 +559,7 @@ export function NavigationBar(props: NavigationBarProps) {
               )}
             </div>
           )}
-          <div className="nav-popover-anchor">
+          <div className="nav-popover-anchor" hidden={!shows('adblock')}>
             <IconButton
               label={adblockActive ? `广告与跟踪拦截已开启${props.blockedCount ? `（已拦截 ${props.blockedCount} 项）` : ''}` : '广告与跟踪拦截已关闭'}
               active={shieldOpen || props.blockedCount > 0}
@@ -578,7 +592,7 @@ export function NavigationBar(props: NavigationBarProps) {
             )}
           </div>
           {props.passwordEntries.length > 0 && (
-            <div className="nav-popover-anchor">
+            <div className="nav-popover-anchor" hidden={!shows('passwords')}>
               <IconButton
                 label={`填充已保存的密码（${props.passwordEntries.length}）`}
                 active={passwordsOpen}
@@ -610,9 +624,9 @@ export function NavigationBar(props: NavigationBarProps) {
               )}
             </div>
           )}
-          <IconButton label="书签" active={page === 'bookmarks'} onClick={props.onBookmarks}><BookOpen size={18} /></IconButton>
-          <IconButton label="历史记录" active={page === 'history'} onClick={props.onHistory}><Clock3 size={18} /></IconButton>
-          {props.onDownloads && (
+          {shows('bookmarks') && <IconButton label="书签" active={page === 'bookmarks'} onClick={props.onBookmarks}><BookOpen size={18} /></IconButton>}
+          {shows('history') && <IconButton label="历史记录" active={page === 'history'} onClick={props.onHistory}><Clock3 size={18} /></IconButton>}
+          {props.onDownloads && shows('downloads') && (
             <IconButton
               className="download-button"
               label={props.downloadCount ? `下载内容（${props.downloadCount} 项进行中）` : '下载内容 (Ctrl+J)'}
@@ -622,7 +636,7 @@ export function NavigationBar(props: NavigationBarProps) {
               {Boolean(props.downloadCount) && <span className="download-button__badge">{props.downloadCount}</span>}
             </IconButton>
           )}
-          {props.extensionActions && props.extensionActions.length > 0 && (
+          {props.extensionActions && props.extensionActions.length > 0 && shows('extensions') && (
             <div className="extension-actions" role="group" aria-label="扩展">
               {props.extensionActions.map((extension) => (
                 <button
@@ -648,7 +662,7 @@ export function NavigationBar(props: NavigationBarProps) {
               ))}
             </div>
           )}
-          <IconButton label="设置" active={page === 'settings'} onClick={props.onSettings}><Settings2 size={18} /></IconButton>
+          {shows('settings') && <IconButton label="设置" active={page === 'settings'} onClick={props.onSettings}><Settings2 size={18} /></IconButton>}
         </div>
         <BrowserMenu
           rootRef={menuRootRef}

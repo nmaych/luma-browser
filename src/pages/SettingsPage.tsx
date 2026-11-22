@@ -50,6 +50,7 @@ import { SHORTCUT_GROUPS, SHORTCUT_ACTION_LABELS, DEFAULT_SHORTCUTS, type Shortc
 import { acceleratorFromEvent, findShortcutConflict, formatAccelerator } from '../utils/shortcuts';
 import { getAllSearchEngines, validateSearchEngineTemplate } from '../data/searchEngines';
 import type {
+  AddressBarButton,
   HistoryItem,
   PermissionCategory,
   PermissionOverview,
@@ -218,6 +219,20 @@ function PanelHeading({ icon, title, description }: { icon: ReactNode; title: st
   );
 }
 
+/** Every button the address bar can show, in display order. */
+const ADDRESS_BAR_BUTTONS: { key: AddressBarButton; label: string; hint: string }[] = [
+  { key: 'reader', label: '阅读模式', hint: '把文章从版式中抽出来阅读。' },
+  { key: 'translate', label: '网页翻译', hint: '选择目标语言并翻译当前页面。' },
+  { key: 'screenshot', label: '网页截图', hint: '保存可见区域、整页或框选区域。' },
+  { key: 'adblock', label: '广告拦截', hint: '查看本页拦截数量并可临时关闭。' },
+  { key: 'passwords', label: '密码填充', hint: '填入本网站已保存的登录信息，仅在有条目时出现。' },
+  { key: 'bookmarks', label: '书签', hint: '打开书签管理器。' },
+  { key: 'history', label: '历史记录', hint: '打开历史记录页面。' },
+  { key: 'downloads', label: '下载内容', hint: '打开下载管理器并显示进行中数量。' },
+  { key: 'extensions', label: '扩展图标', hint: '显示已启用扩展的工具栏图标。' },
+  { key: 'settings', label: '设置', hint: '打开当前设置页面。' },
+];
+
 export function SettingsPage({
   preferences,
   history,
@@ -309,6 +324,9 @@ export function SettingsPage({
   const [extensions, setExtensions] = useState<LumaExtension[]>([]);
   const [extensionBusy, setExtensionBusy] = useState<string | null>(null);
   const [extensionError, setExtensionError] = useState('');
+  const [userscripts, setUserscripts] = useState<LumaUserscript[]>([]);
+  const [userscriptBusy, setUserscriptBusy] = useState<string | null>(null);
+  const [userscriptError, setUserscriptError] = useState('');
   const [defaultBrowser, setDefaultBrowser] = useState<LumaDefaultBrowserStatus | null>(null);
   const [defaultBrowserBusy, setDefaultBrowserBusy] = useState(false);
   const [defaultBrowserMessage, setDefaultBrowserMessage] = useState('');
@@ -471,7 +489,60 @@ export function SettingsPage({
   useEffect(() => {
     if (activeSection !== 'extensions') return;
     void refreshExtensions();
+    void (async () => {
+      if (!desktop?.listUserscripts) return;
+      try {
+        setUserscripts(await desktop.listUserscripts());
+      } catch {
+        // The list is re-fetched whenever the section is opened.
+      }
+    })();
   }, [activeSection]);
+
+  const installUserscript = async () => {
+    if (!desktop?.installUserscript) return;
+    setUserscriptBusy('install');
+    setUserscriptError('');
+    try {
+      const result = await desktop.installUserscript();
+      if (result?.list) setUserscripts(result.list);
+      if (!result?.ok && !result?.cancelled) setUserscriptError(result?.error ?? '安装脚本失败');
+    } catch (error) {
+      setUserscriptError(error instanceof Error ? error.message : '安装脚本失败');
+    } finally {
+      setUserscriptBusy(null);
+    }
+  };
+
+  const toggleUserscript = async (script: LumaUserscript, enabled: boolean) => {
+    if (!desktop?.setUserscriptEnabled) return;
+    setUserscriptError('');
+    setUserscripts((current) => current.map((item) => (item.id === script.id ? { ...item, enabled } : item)));
+    try {
+      const result = await desktop.setUserscriptEnabled(script.id, enabled);
+      if (result?.list) setUserscripts(result.list);
+      if (!result?.ok) setUserscriptError(result?.error ?? '切换脚本状态失败');
+    } catch {
+      setUserscriptError('切换脚本状态失败');
+    }
+  };
+
+  const removeUserscript = async (script: LumaUserscript) => {
+    if (!desktop?.removeUserscript) return;
+    if (userscriptBusy !== `remove:${script.id}`) {
+      setUserscriptBusy(`remove:${script.id}`);
+      return;
+    }
+    setUserscriptBusy(script.id);
+    setUserscriptError('');
+    try {
+      const result = await desktop.removeUserscript(script.id);
+      if (result?.list) setUserscripts(result.list);
+      if (!result?.ok) setUserscriptError(result?.error ?? '移除脚本失败');
+    } finally {
+      setUserscriptBusy(null);
+    }
+  };
 
   // Windows only lets an app register itself; the user still confirms in
   // Settings, so the card links there and reports the real association state.
@@ -907,7 +978,7 @@ export function SettingsPage({
             </nav>
             <div className="settings-sidebar__footer">
               <strong>Luma Browser</strong>
-              <span>版本 {appVersions?.app ?? '1.20.1'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
+              <span>版本 {appVersions?.app ?? '1.21.0'} · Chromium {appVersions?.chrome?.split('.')[0] ?? '156'}</span>
             </div>
           </aside>
 
@@ -1094,7 +1165,32 @@ export function SettingsPage({
                 </div>
 
                 <div className="settings-card">
-                  <div className="settings-card__title"><Globe2 size={18} /><div><h3>翻译与隐私</h3><p>网页翻译会把提取出的页面文字发送给第三方翻译服务（Google / MyMemory），不会上传 Cookie 或登录信息。</p></div></div>
+                  <div className="settings-card__title"><Globe2 size={18} /><div><h3>翻译与隐私</h3><p>网页翻译会把提取出的页面文字发送给第三方翻译服务（DeepL / Google / MyMemory），不会上传 Cookie 或登录信息。</p></div></div>
+                  <div className="setting-row">
+                    <div><strong>翻译服务</strong><p>「自动」会依次尝试 DeepL、Google、MyMemory，某个服务不可用时自动换下一个，并记住上次成功的服务。</p></div>
+                    <select
+                      className="settings-select"
+                      aria-label="翻译服务"
+                      value={preferences.translationProvider}
+                      onChange={(event) => onUpdate({ translationProvider: event.target.value as Preferences['translationProvider'] })}
+                    >
+                      <option value="auto">自动（推荐）</option>
+                      <option value="deepl">DeepL（需要 API Key）</option>
+                      <option value="google">Google 翻译</option>
+                      <option value="mymemory">MyMemory</option>
+                    </select>
+                  </div>
+                  <div className="setting-row">
+                    <div><strong>DeepL API Key</strong><p>可选。免费版 Key 以 <code>:fx</code> 结尾，填好后「自动」会优先使用 DeepL；Key 只保存在本机。</p></div>
+                    <input
+                      className="settings-input settings-input--wide"
+                      type="password"
+                      aria-label="DeepL API Key"
+                      placeholder="例如 1234abcd-…:fx"
+                      value={preferences.translationApiKey}
+                      onChange={(event) => onUpdate({ translationApiKey: event.target.value.trim().slice(0, 200) })}
+                    />
+                  </div>
                   <div className="setting-row">
                     <div><strong>允许发送页面文字用于翻译</strong><p>关闭后整页翻译不可用；随时可以重新开启。</p></div>
                     <label className="switch"><input aria-label="允许发送页面文字用于翻译" type="checkbox" checked={preferences.translationConsent} onChange={(event) => onUpdate({ translationConsent: event.target.checked })} /><span /></label>
@@ -1183,11 +1279,27 @@ export function SettingsPage({
                 </div>
 
                 <div className="settings-card">
-                  <div className="settings-card__title"><Search size={18} /><div><h3>地址栏</h3><p>控制输入时出现的辅助信息。</p></div></div>
+                  <div className="settings-card__title"><Search size={18} /><div><h3>地址栏</h3><p>控制输入提示与右侧按钮的显示。</p></div></div>
                   <div className="setting-row">
                     <div><strong>显示输入历史</strong><p>在地址栏输入时，从最近浏览记录中推荐匹配的页面。</p></div>
                     <label className="switch"><input aria-label="显示输入历史" type="checkbox" checked={preferences.showAddressSuggestions} onChange={(event) => onUpdate({ showAddressSuggestions: event.target.checked })} /><span /></label>
                   </div>
+                  {ADDRESS_BAR_BUTTONS.map((button) => (
+                    <div className="setting-row" key={button.key}>
+                      <div><strong>{button.label}</strong><p>{button.hint}</p></div>
+                      <label className="switch">
+                        <input
+                          aria-label={`显示${button.label}按钮`}
+                          type="checkbox"
+                          checked={preferences.addressBarButtons[button.key] !== false}
+                          onChange={(event) => onUpdate({
+                            addressBarButtons: { ...preferences.addressBarButtons, [button.key]: event.target.checked },
+                          })}
+                        />
+                        <span />
+                      </label>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -1465,6 +1577,85 @@ export function SettingsPage({
                     </p>
                   </div>
                 )}
+
+                {desktop && (
+                  <div className="settings-card">
+                    <div className="settings-card__header">
+                      <div>
+                        <h3>用户脚本</h3>
+                        <p>
+                          直接运行 <code>.user.js</code>：脚本在页面主世界执行，支持 GM_setValue / GM_getValue、
+                          GM_addStyle、GM_xmlhttpRequest 等常用能力。当前内核没有
+                          <code>chrome.userScripts</code>，篡改猴（MV3）因此无法注入脚本，用这里替代即可。
+                        </p>
+                      </div>
+                      <div className="update-actions">
+                        <button className="secondary-button" type="button" onClick={() => void desktop.openUserscriptsFolder?.()}>
+                          <FolderOpen size={15} /> 打开目录
+                        </button>
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={userscriptBusy === 'install'}
+                          onClick={() => void installUserscript()}
+                        >
+                          <Plus size={16} /> {userscriptBusy === 'install' ? '正在安装…' : '安装脚本'}
+                        </button>
+                      </div>
+                    </div>
+                    {userscriptError && <p className="form-error" role="alert">{userscriptError}</p>}
+                    {userscripts.length === 0 ? (
+                      <p className="extension-empty">
+                        还没有用户脚本。可以点击「安装脚本」选择 <code>.user.js</code>，
+                        也可以把脚本放进 <code>Luma Browser\Userscripts</code> 后重新加载。脚本在每次页面加载完成后注入。
+                      </p>
+                    ) : (
+                      <div className="extension-list">
+                        {userscripts.map((script) => (
+                          <div className="extension-row" key={script.id}>
+                            <div className="extension-row__main">
+                              <strong>
+                                {script.name}
+                                <small>{script.version ? `v${script.version}` : '未标注版本'}</small>
+                              </strong>
+                              <p>{script.description || '这个脚本没有提供描述。'}</p>
+                              <div className="extension-row__meta">
+                                <em>{script.runAt}</em>
+                                {(script.matches.length + script.includes.length) > 0 && (
+                                  <em title={[...script.matches, ...script.includes].join('\n')}>
+                                    {script.matches.length + script.includes.length} 条匹配规则
+                                  </em>
+                                )}
+                                {script.grants.length > 0 && <em title={script.grants.join('、')}>{script.grants.length} 项 GM 授权</em>}
+                                <em>{(script.size / 1024).toFixed(1)} KB</em>
+                              </div>
+                            </div>
+                            <div className="extension-row__actions">
+                              <label className="switch">
+                                <input
+                                  aria-label={`启用 ${script.name}`}
+                                  type="checkbox"
+                                  checked={script.enabled}
+                                  onChange={(event) => void toggleUserscript(script, event.target.checked)}
+                                />
+                                <span />
+                              </label>
+                              <button
+                                className={`icon-button icon-button--small ${userscriptBusy === `remove:${script.id}` ? 'is-danger' : ''}`}
+                                type="button"
+                                aria-label={userscriptBusy === `remove:${script.id}` ? `确认移除 ${script.name}` : `移除 ${script.name}`}
+                                title={userscriptBusy === `remove:${script.id}` ? '再次点击确认移除' : '移除'}
+                                onClick={() => void removeUserscript(script)}
+                              >
+                                {userscriptBusy === `remove:${script.id}` ? <span className="confirm-remove">确认</span> : <Trash2 size={13} />}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1703,7 +1894,7 @@ export function SettingsPage({
                   <h3>Luma Browser</h3>
                   <p>一个专注、轻盈且注重隐私的独立桌面浏览器。基于 Electron、Chromium 与 React 构建。</p>
                   <div>
-                    <span>版本 {appVersions?.app ?? '1.20.1'}</span>
+                    <span>版本 {appVersions?.app ?? '1.21.0'}</span>
                     <span>Chromium {appVersions?.chrome ?? '156.0.8078.80'}</span>
                     <span>Electron {appVersions?.electron ?? '45.2.3'}</span>
                     <span>{appVersions?.platform === 'darwin' ? 'macOS' : appVersions?.platform === 'linux' ? 'Linux' : 'Windows'} {appVersions?.arch ?? 'x64'}</span>

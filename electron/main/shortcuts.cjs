@@ -48,6 +48,14 @@ function shortcutActionForInput(input, shortcuts = {}) {
   if (normalizeInputKey(input.key) === 'f5' && !input.control && !input.alt && !input.meta && !input.shift) {
     return 'reload';
   }
+  // Layouts disagree about which key produces "+": accept the shifted forms of
+  // the zoom bindings so Ctrl++ and Ctrl+_ behave like Ctrl+= and Ctrl+-.
+  if (input.control && !input.alt && !input.meta) {
+    const key = normalizeInputKey(input.key);
+    if ((key === '=' || key === '+') && shortcuts['zoom-in']) return 'zoom-in';
+    if ((key === '-' || key === '_') && shortcuts['zoom-out']) return 'zoom-out';
+    if (key === '0' && shortcuts['zoom-reset']) return 'zoom-reset';
+  }
   return null;
 }
 

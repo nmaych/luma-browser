@@ -76,4 +76,21 @@ describe('favicon cache', () => {
     expect(results.every((icon) => icon === 'data:image/png;base64,DDDD')).toBe(true);
     expect(fetchFavicon).toHaveBeenCalledTimes(1);
   });
+
+  it('reports cache age and can bypass the cache once for the startup check', async () => {
+    const icons = ['data:image/png;base64,EEEE', 'data:image/png;base64,FFFF'];
+    const fetchFavicon = vi.fn(async () => icons.shift() ?? 'data:image/png;base64,GGGG');
+    stubDesktop(fetchFavicon);
+    const { resolveFavicon, refreshFavicon, getFaviconAge, getCachedFavicon } = await import('../src/utils/faviconCache');
+
+    expect(getFaviconAge('https://stale.example.com/page')).toBeNull();
+    await resolveFavicon('https://stale.example.com/page');
+    expect(getFaviconAge('https://stale.example.com/page')).toBeTypeOf('number');
+
+    // resolve() keeps answering from the cache; refresh() asks the network again.
+    await expect(resolveFavicon('https://stale.example.com/page')).resolves.toBe('data:image/png;base64,EEEE');
+    await expect(refreshFavicon('https://stale.example.com/page')).resolves.toBe('data:image/png;base64,FFFF');
+    expect(fetchFavicon).toHaveBeenCalledTimes(2);
+    expect(getCachedFavicon('https://stale.example.com/page')).toBe('data:image/png;base64,FFFF');
+  });
 });

@@ -99,7 +99,7 @@ function describeCompatibility(manifest) {
   const notes = [];
   const version = Number(manifest.manifest_version);
   if (missing.includes('chrome.userScripts')) {
-    notes.push('依赖 chrome.userScripts 注入用户脚本，当前内核不提供该 API，脚本会被跳过（扩展管理界面仍可打开）');
+    notes.push('依赖 chrome.userScripts 注入用户脚本，当前内核不提供该 API（篡改猴 5.x 属于这种情况），脚本不会运行；请改用「设置 → 扩展 → 用户脚本」直接加载 .user.js');
   }
   if (version === 3 && permissions.includes('webRequestBlocking')) {
     notes.push('Manifest V3 不再允许 webRequestBlocking，请求拦截可能退化为 declarativeNetRequest');
