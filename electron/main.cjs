@@ -11,6 +11,7 @@ const { createSettingsWriter, loadSettings } = require('./main/settings.cjs');
 const { configureSession } = require('./main/sessionPolicy.cjs');
 const { createExtensionManager } = require('./extensions.cjs');
 const { createUserscriptManager } = require('./main/userscripts.cjs');
+const { siteFixesFor } = require('./main/site-fixes.cjs');
 const { registerBossKey, shortcutActionForInput, currentBossKey } = require('./main/shortcuts.cjs');
 const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
@@ -1444,6 +1445,22 @@ function injectUserscripts(contents) {
   }
 }
 
+/**
+ * Applies per-site compatibility patches. These are not user scripts: they ship
+ * with the browser, run once per document, and compensate for layout defects on
+ * specific sites that would otherwise look like a bug in Luma.
+ */
+function injectSiteFixes(contents) {
+  if (contents.isDestroyed()) return;
+  const url = contents.getURL();
+  if (!url) return;
+  for (const fix of siteFixesFor(url)) {
+    void contents.executeJavaScript(fix.script, false).catch((error) => {
+      console.error(`[site-fix] ${fix.id} failed:`, error);
+    });
+  }
+}
+
 function attachPageFeatures(contents, { native = false } = {}) {
   if (!contents || contents.isDestroyed()) return;
   if (!native) {
@@ -1489,6 +1506,7 @@ function attachPageFeatures(contents, { native = false } = {}) {
   contents.on('dom-ready', () => {
     applyCosmeticFilters(contents);
     injectUserscripts(contents);
+    injectSiteFixes(contents);
   });
   contents.on('render-process-gone', (_event, details) => {
     hostContentsOf(contents)?.send('browser:render-gone', {
