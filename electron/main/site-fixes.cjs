@@ -15,11 +15,10 @@
  * banner area shows a blank grey block for several seconds while the dots and
  * arrows keep working.
  *
- * The patch watches the strip geometry. When no slide of usable width overlaps
- * the visible carousel area for two samples in a row (~0.8s, far longer than a
- * slide transition), it clicks the next pagination dot so the site re-renders a
- * valid index. It stays out of the way while the site itself is showing its
- * "content blocked" notice.
+ * The patch watches the strip geometry. An index past the last dot is repaired
+ * immediately; a viewport with no slide of usable width overlapping it is
+ * repaired after four samples (~0.8s, far longer than a slide transition). It
+ * stays out of the way while the site itself shows its "content blocked" notice.
  */
 const BILIBILI_CAROUSEL_FIX = `(function () {
   if (window.__lumaCarouselFix) return;
@@ -99,14 +98,17 @@ const BILIBILI_CAROUSEL_FIX = `(function () {
     var wrap = document.querySelector('.vui_carousel');
     if (!wrap || !onScreen(wrap)) { strikes = 0; return; }
     if (siteShowsNotice(wrap)) { strikes = 0; return; }
-    if (!pastLastDot(wrap) && hasUsableSlide(wrap)) { strikes = 0; return; }
+    // Parking past the last dot can only happen because of the defect, so it is
+    // repaired on the first sample; waiting would only lengthen the grey flash.
+    if (pastLastDot(wrap)) { strikes = 0; repair(wrap); return; }
+    if (hasUsableSlide(wrap)) { strikes = 0; return; }
     strikes += 1;
-    if (strikes < 2) return;
+    if (strikes < 4) return;
     strikes = 0;
     repair(wrap);
   }
 
-  window.setInterval(check, 400);
+  window.setInterval(check, 200);
 })();`;
 
 const SITE_FIXES = [
