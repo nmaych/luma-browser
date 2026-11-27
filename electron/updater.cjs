@@ -76,6 +76,12 @@ function createUpdater({ currentVersion, onState, paths }) {
   // Guards the quit path: an immediate install already spawned the installer,
   // and a second silent run during `will-quit` would race it.
   let installerLaunched = false;
+  /**
+   * The user asked to install now. The installer is started from `will-quit`
+   * instead of straight away: quitting first lets the renderer flush tabs and
+   * history, while the NSIS silent install kills a still-running app outright.
+   */
+  let installRequested = false;
 
   /** @type {{ lastCheckedAt: number, prefs: typeof DEFAULT_PREFS, pending: any, previous: any }} */
   let store = {
@@ -551,10 +557,19 @@ function createUpdater({ currentVersion, onState, paths }) {
     // when it is started with --force-run, so the window comes back by itself
     // once the files are replaced.
     const args = relaunch ? ['/S', '--force-run'] : ['/S'];
+    // A silent install otherwise uses the installer's default per-user folder.
+    // Users who picked another drive (or run a copied build) would keep the old
+    // files and only gain a second copy under %LOCALAPPDATA%, which looks like
+    // a failed install. NSIS reads /D as the rest of the command line and does
+    // not accept a quoted value, so the arguments are passed verbatim and /D
+    // comes last.
+    const installDir = app.isPackaged ? path.dirname(app.getPath('exe')) : '';
+    if (installDir) args.push(`/D=${installDir}`);
     const child = spawn(installerPath, args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
+      windowsVerbatimArguments: Boolean(installDir),
     });
     child.unref();
     installerLaunched = true;
@@ -566,15 +581,11 @@ function createUpdater({ currentVersion, onState, paths }) {
       publish({ status: 'error', error: '安装包已被删除，请重新下载' });
       return false;
     }
-    try {
-      log(`installing ${state.version} now`);
-      launchInstaller({ relaunch: true });
-    } catch (error) {
-      log(`install failed: ${error instanceof Error ? error.message : String(error)}`);
-      publish({ status: 'error', error: error instanceof Error ? error.message : '无法启动安装程序' });
-      return false;
-    }
-    setTimeout(() => app.quit(), 800);
+    log(`installing ${state.version} after quitting`);
+    installRequested = true;
+    // Leave through the normal quit path so the profile is written before the
+    // installer replaces the binaries.
+    setTimeout(() => app.quit(), 150);
     return true;
   }
 
@@ -585,6 +596,17 @@ function createUpdater({ currentVersion, onState, paths }) {
    */
   function installOnQuit() {
     if (!app.isPackaged || installerLaunched) return false;
+    if (installRequested) {
+      installRequested = false;
+      try {
+        log(`installing ${state.version} now`);
+        launchInstaller({ relaunch: true });
+        return true;
+      } catch (error) {
+        log(`install failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    }
     const pending = store.pending;
     if (!pending || !store.prefs.applyOnQuit) return false;
     if (!isNewerVersion(pending.version, currentVersion)) return false;

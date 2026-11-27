@@ -142,6 +142,30 @@ describe('browser session', () => {
     unmount();
   });
 
+  it('restores the page a tab was last on, not the URL it was opened with', () => {
+    // Browser-preview runs keep their tabs in sessionStorage.
+    sessionStorage.setItem('luma.tabs.v1', JSON.stringify([
+      {
+        id: 'tab-restored',
+        entries: [
+          { url: 'https://example.com/start', title: 'Start', visitedAt: 1 },
+          { url: 'https://example.com/deep/page', title: 'Deep', visitedAt: 2 },
+        ],
+        historyIndex: 1,
+        loadKey: 2,
+        viewUrl: 'https://example.com/start',
+        favicon: '',
+        isMuted: false,
+      },
+    ]));
+    sessionStorage.setItem('luma.active-tab.v1', JSON.stringify('tab-restored'));
+
+    const { result, unmount } = renderHook(() => useBrowser());
+    expect(result.current.activeEntry.url).toBe('https://example.com/deep/page');
+    expect(result.current.activeTab.viewUrl).toBe('https://example.com/deep/page');
+    unmount();
+  });
+
   it('does not navigate for invalid input and reports feedback', () => {
     const { result, unmount } = renderHook(() => useBrowser());
     let succeeded = true;

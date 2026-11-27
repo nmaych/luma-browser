@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, ClipboardItem, crashReporter, dialog, globalShortcut, ipcMain, nativeImage, net, screen, session, shell, WebContentsView, webContents } = require('electron');
+const { app, BrowserWindow, clipboard, ClipboardItem, crashReporter, dialog, globalShortcut, ipcMain, nativeImage, net, powerSaveBlocker, screen, session, shell, WebContentsView, webContents } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -18,6 +18,7 @@ const defaultBrowser = require('./main/defaultBrowser.cjs');
 const fileIcons = require('./main/fileIcons.cjs');
 const { translateTexts } = require('./main/translate.cjs');
 const { hostMatchesSite, siteKey, sitesIncludeHost } = require('./main/siteMatch.cjs');
+const { planResume } = require('./main/downloadResume.cjs');
 const {
   normalizeExternalBounds,
   normalizeScreenPoint,
@@ -100,17 +101,25 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
-    const win = mainWindow ?? BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
     const urls = launchUrls(argv);
-    if (!win) {
+    // The download manager is a utility window: focusing it instead of opening
+    // a browser window leaves the user stuck on the download list with no way
+    // back to the tabs. Any real browser window (including a torn-off one) is
+    // preferred; only when none is left does a new one get created.
+    const browserWindow = mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow
+      : BrowserWindow.getAllWindows().find((candidate) => (
+        !candidate.isDestroyed() && candidate !== downloadsWindow && appWindows.has(candidate)
+      ));
+    if (!browserWindow) {
       queuedLaunchUrls.push(...urls);
       createWindow();
       return;
     }
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
-    openLaunchUrls(urls, win);
+    if (browserWindow.isMinimized()) browserWindow.restore();
+    browserWindow.show();
+    browserWindow.focus();
+    openLaunchUrls(urls, browserWindow);
   });
 }
 
@@ -327,6 +336,14 @@ const blockedBroadcastTimers = new Map();
 let persistDownloadsTimer = null;
 /** @type {NodeJS.Timeout | null} */
 let broadcastDownloadsTimer = null;
+/**
+ * Keeps Windows from suspending the machine while bytes are still moving.
+ * Started with the first active transfer and stopped with the last one.
+ * @type {number | null}
+ */
+let downloadPowerBlockerId = null;
+/** Contents currently in an HTML (video / presentation) fullscreen. */
+const htmlFullscreenContents = new Set();
 /** Last payload written to disk, so progress ticks do not rewrite the file. */
 let lastPersistedDownloads = '';
 /** @type {Map<string, any>} */
@@ -858,13 +875,26 @@ function createWindow({
    * Fullscreen is a page mode, not a window mode: the renderer hides the tab
    * strip and the toolbar so the web page itself fills the screen. It has to
    * know when the window really changed, which only these events report — the
-   * IPC call returns before Windows finishes the transition.
+   * IPC call returns before Windows finishes the transition. The window also
+   * re-reports the settled state shortly after, because a toggle during the
+   * transition can swallow the event and leave the chrome hidden for good.
    */
-  win.on('enter-full-screen', () => {
-    if (!win.isDestroyed()) win.webContents.send('window:fullscreen', true);
-  });
-  win.on('leave-full-screen', () => {
-    if (!win.isDestroyed()) win.webContents.send('window:fullscreen', false);
+  const fullscreenTimers = [];
+  const reportFullscreen = () => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('window:fullscreen', win.isFullScreen());
+  };
+  const syncFullscreen = () => {
+    reportFullscreen();
+    for (const timer of fullscreenTimers) clearTimeout(timer);
+    fullscreenTimers.length = 0;
+    fullscreenTimers.push(setTimeout(reportFullscreen, 320), setTimeout(reportFullscreen, 1100));
+  };
+  win.on('enter-full-screen', syncFullscreen);
+  win.on('leave-full-screen', syncFullscreen);
+  win.on('closed', () => {
+    for (const timer of fullscreenTimers) clearTimeout(timer);
+    fullscreenTimers.length = 0;
   });
 
   // Web pages may only use http(s) or local files. System pages are never exposed to guests.
@@ -922,7 +952,15 @@ function createWindow({
     for (const [targetId, entry] of [...devtoolsViews]) {
       if (entry.window === win) destroyDevtoolsView(targetId);
     }
-    if (mainWindow === win) mainWindow = null;
+    if (mainWindow === win) {
+      mainWindow = null;
+      // A lone download manager must not keep the process alive: it has no way
+      // back to the tabs, and relaunches used to focus it instead of opening
+      // the browser. Active transfers keep the app running so they finish.
+      if (downloadsWindow && !downloadsWindow.isDestroyed() && activeDownloadCount() === 0) {
+        downloadsWindow.close();
+      }
+    }
   });
 
   if (isDevelopment) {
@@ -939,6 +977,35 @@ function downloadSnapshot() {
     .sort((left, right) => right.startedAt - left.startedAt);
 }
 
+function activeDownloadCount() {
+  let count = 0;
+  for (const entry of downloads.values()) {
+    if (entry.record.state === 'progressing' && !entry.record.paused) count += 1;
+  }
+  return count;
+}
+
+/**
+ * A long download used to stop the moment the machine idled into sleep, and the
+ * transfer then resumed from a stale offset. `prevent-app-suspension` keeps the
+ * system awake while still letting the display turn off, which is what a
+ * background download needs.
+ */
+function syncDownloadPowerBlocker() {
+  const active = activeDownloadCount() > 0;
+  const started = downloadPowerBlockerId !== null && powerSaveBlocker.isStarted(downloadPowerBlockerId);
+  if (active && !started) {
+    downloadPowerBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+  } else if (!active && downloadPowerBlockerId !== null) {
+    try {
+      if (powerSaveBlocker.isStarted(downloadPowerBlockerId)) powerSaveBlocker.stop(downloadPowerBlockerId);
+    } catch {
+      // The blocker may already be gone after a crash.
+    }
+    downloadPowerBlockerId = null;
+  }
+}
+
 function broadcastDownloads() {
   if (broadcastDownloadsTimer) {
     clearTimeout(broadcastDownloadsTimer);
@@ -948,6 +1015,7 @@ function broadcastDownloads() {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('downloads:changed', snapshot);
   }
+  syncDownloadPowerBlocker();
 }
 
 /**
@@ -1124,19 +1192,27 @@ function startResumableDownload(entry) {
   } catch {
     fileSize = 0;
   }
-  // Chromium preallocates the destination file, so the on-disk size can equal
-  // the total size while only part of the payload has arrived. The record's
-  // receivedBytes is the authoritative resume offset; trim the sparse tail.
-  let start = record.receivedBytes > 0 ? record.receivedBytes : fileSize;
-  if (fileSize > 0 && start > fileSize) start = fileSize;
+  // The bytes on disk decide where a resume may start. Chromium preallocates
+  // the destination, so the file can be larger than what actually arrived;
+  // and a cancelled download removes the partial file entirely, in which case
+  // the recorded offset points past the end of nothing.
+  const plan = planResume({
+    recordedBytes: record.receivedBytes,
+    fileSize,
+    totalBytes: record.totalBytes,
+  });
+  // `start` is adjusted again once the server answers (200 resets it to zero),
+  // so it cannot be a constant.
+  let start = plan.start;
+  const complete = plan.complete;
   if (fileSize > start) {
     try {
       fs.truncateSync(record.savePath, start);
     } catch {
-      // A locked file still resumes from the recorded offset.
+      // A locked file still resumes from the offset we can read.
     }
   }
-  if (record.totalBytes > 0 && start > 0 && start >= record.totalBytes) {
+  if (complete) {
     entry.record = { ...record, state: 'completed', paused: false, speed: 0, receivedBytes: start, resumable: false };
     broadcastDownloads();
     schedulePersistDownloads();
@@ -1180,11 +1256,49 @@ function startResumableDownload(entry) {
     const status = response.statusCode;
     let stream = null;
     if (status === 200) {
+      // The server ignored the Range header; start the file over.
       start = 0;
       entry.record = { ...entry.record, receivedBytes: 0 };
-      stream = fs.createWriteStream(record.savePath);
+      stream = fs.createWriteStream(record.savePath, { flags: 'w' });
     } else if (status === 206) {
-      stream = fs.createWriteStream(record.savePath, { flags: 'a' });
+      const range = String(response.headers['content-range'] || '');
+      const match = /^bytes\s+(\d+)-/i.exec(range);
+      const rangeStart = match ? Number(match[1]) : start;
+      if (start > 0 && Number.isFinite(rangeStart) && rangeStart !== start) {
+        // Resumed at a different offset than requested: appending there would
+        // interleave two positions in one file, so restart cleanly.
+        start = 0;
+        entry.record = { ...entry.record, receivedBytes: 0 };
+        stream = fs.createWriteStream(record.savePath, { flags: 'w' });
+      } else {
+        // Explicit offset instead of append: a preallocated (sparse) file can
+        // be larger than the payload, and appending would write past the gap.
+        stream = fs.createWriteStream(record.savePath, { flags: start > 0 ? 'r+' : 'w', start });
+      }
+    } else if (status === 416) {
+      // "Range not satisfiable": the recorded offset no longer matches the
+      // file (or the file is already complete). Retry once from zero.
+      if (entry.request === request) entry.request = null;
+      try {
+        request.abort();
+      } catch {
+        // Already finished.
+      }
+      if (start > 0 && !entry.rangeFallback) {
+        entry.rangeFallback = true;
+        try {
+          fs.truncateSync(record.savePath, 0);
+        } catch {
+          // A locked file is simply downloaded again over the top.
+        }
+        entry.record = { ...entry.record, receivedBytes: 0 };
+        setTimeout(() => {
+          if (downloads.get(record.id) === entry) startResumableDownload(entry);
+        }, 0);
+        return;
+      }
+      settleCustomDownload(entry, 'interrupted');
+      return;
     } else {
       settleCustomDownload(entry, 'interrupted');
       try {
@@ -1246,7 +1360,14 @@ function startResumableDownload(entry) {
       if (entry.request !== request) return;
       stream.end(() => {
         if (entry.request !== request) return;
-        settleCustomDownload(entry, 'completed');
+        const total = entry.record.totalBytes;
+        const received = entry.record.receivedBytes;
+        // A proxy or a dropped mobile link can close the body early and still
+        // fire 'end'. Calling that complete produced a truncated file that
+        // looked finished and could not be resumed.
+        const short = total > 0 && received < total;
+        if (short) entry.record = { ...entry.record, totalBytes: total };
+        settleCustomDownload(entry, short ? 'interrupted' : 'completed');
       });
     });
     response.on('aborted', () => {
@@ -1528,6 +1649,12 @@ function injectPipButton(contents) {
 
 function attachPageFeatures(contents, { native = false } = {}) {
   if (!contents || contents.isDestroyed()) return;
+  // A video or presentation can own the screen on its own. F11 has to release
+  // that fullscreen first, otherwise the window leaves fullscreen while the
+  // page keeps covering the desktop.
+  contents.on('enter-html-full-screen', () => htmlFullscreenContents.add(contents.id));
+  contents.on('leave-html-full-screen', () => htmlFullscreenContents.delete(contents.id));
+  contents.once('destroyed', () => htmlFullscreenContents.delete(contents.id));
   if (!native) {
     contents.once('destroyed', () => {
       destroyDevtoolsView(contents.id);
@@ -1548,8 +1675,7 @@ function attachPageFeatures(contents, { native = false } = {}) {
 
   // Native views install their own handler in pageViews.cjs.
   if (!native) {
-    contents.setWindowOpenHandler(({ url }) => {
-      if (isSafeHttpUrl(url) || (isFileUrl(url) && isFileUrl(contents.getURL()))) {
+    contents.setWindowOpenHandler(({ url }) => {      if (isSafeHttpUrl(url) || (isFileUrl(url) && isFileUrl(contents.getURL()))) {
         hostContentsOf(contents)?.send('browser:new-window', url);
       }
       return { action: 'deny' };
@@ -1787,15 +1913,34 @@ app.on('web-contents-created', (_event, contents) => {
     // Window-level shortcuts work for the chrome and for focused guest pages.
     contents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown') return;
+      // Holding F11 repeats keydown dozens of times a second; each repeat used
+      // to flip the window again, so a slightly long press ended half-way
+      // between the two modes (chrome hidden but window not fullscreen, or the
+      // reverse).
+      if (input.isAutoRepeat) return;
       const devtoolsHost = devtoolsHostContents.get(contents.id);
       const manager = hostContentsOf(contents) ?? devtoolsHost?.window.webContents ?? contents;
       const hostWindow = BrowserWindow.fromWebContents(manager);
       if (input.key === 'F11') {
         event.preventDefault();
-        hostWindow?.setFullScreen(!hostWindow.isFullScreen());
+        // Release a page-owned fullscreen (video, slide deck) before touching
+        // the window; otherwise the desktop stays covered by the page after
+        // F11 "exited fullscreen".
+        const owned = htmlFullscreenContents.has(contents.id)
+          ? contents
+          : [...htmlFullscreenContents]
+            .map((id) => webContents.fromId(id))
+            .find((item) => item && !item.isDestroyed() && hostContentsOf(item) === manager);
+        if (owned) {
+          void owned
+            .executeJavaScript('document.fullscreenElement && document.exitFullscreen()', true)
+            .catch(() => undefined);
+          return;
+        }
+        if (hostWindow) toggleWindowFullscreen(hostWindow);
       } else if (input.key === 'Escape' && hostWindow?.isFullScreen()) {
         event.preventDefault();
-        hostWindow.setFullScreen(false);
+        toggleWindowFullscreen(hostWindow);
       }
       // The docked DevTools is a separate webContents: while it holds focus the
       // chrome renderer never sees the key, so F12 could open the panel but
@@ -1817,7 +1962,20 @@ app.on('web-contents-created', (_event, contents) => {
   createWindow();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    // Utility windows (downloads) keep the app alive after the browser window
+    // closes; activating the app must bring a browser window back, never focus
+    // the download list on its own.
+    const existing = mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow
+      : BrowserWindow.getAllWindows().find((candidate) => (
+        !candidate.isDestroyed() && candidate !== downloadsWindow && appWindows.has(candidate)
+      ));
+    if (existing) {
+      existing.show();
+      existing.focus();
+      return;
+    }
+    createWindow();
   });
 });
 
@@ -3126,11 +3284,41 @@ ipcMain.handle('app:versions', () => ({
 }));
 
 ipcMain.handle('window:is-maximized', (event) => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false);
+
+/**
+ * Bounds to put back after leaving fullscreen. A frameless window occasionally
+ * keeps the screen-sized geometry once Windows hands control back, which looks
+ * like "F11 did not really exit". Remembering the pre-fullscreen rectangle lets
+ * the window return to where it was.
+ * @type {WeakMap<Electron.BrowserWindow, Electron.Rectangle | null>}
+ */
+const fullscreenRestoreBounds = new WeakMap();
+
+function toggleWindowFullscreen(win) {
+  if (!win || win.isDestroyed()) return false;
+  if (win.isFullScreen()) {
+    win.setFullScreen(false);
+    const restore = fullscreenRestoreBounds.get(win) ?? null;
+    fullscreenRestoreBounds.delete(win);
+    if (restore) {
+      setTimeout(() => {
+        if (win.isDestroyed() || win.isFullScreen() || win.isMaximized()) return;
+        const current = win.getBounds();
+        const display = screen.getDisplayMatching(current).bounds;
+        const coversScreen = current.width >= display.width - 2 && current.height >= display.height - 2;
+        if (coversScreen) win.setBounds(restore);
+      }, 450);
+    }
+    return false;
+  }
+  fullscreenRestoreBounds.set(win, win.isMaximized() ? null : win.getBounds());
+  win.setFullScreen(true);
+  return true;
+}
+
 ipcMain.handle('window:toggle-fullscreen', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win) return false;
-  win.setFullScreen(!win.isFullScreen());
-  return win.isFullScreen();
+  return toggleWindowFullscreen(win);
 });
 function guestContentsFromId(targetId) {
   if (!Number.isInteger(targetId)) return null;
@@ -3870,6 +4058,14 @@ app.on('will-quit', () => {
   extensionPopupWindow ? closeExtensionPopup() : undefined;
   updateManager?.installOnQuit();
   persistDownloadsNow();
+  if (downloadPowerBlockerId !== null) {
+    try {
+      if (powerSaveBlocker.isStarted(downloadPowerBlockerId)) powerSaveBlocker.stop(downloadPowerBlockerId);
+    } catch {
+      // Already released.
+    }
+    downloadPowerBlockerId = null;
+  }
 });
 
 app.on('window-all-closed', () => {

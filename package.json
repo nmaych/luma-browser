@@ -1,7 +1,7 @@
 {
   "name": "luma-browser",
   "productName": "Luma Browser",
-  "version": "1.21.8",
+  "version": "1.21.9",
   "private": true,
   "description": "A lightweight standalone Electron web browser with real tabbed browsing.",
   "author": "Luma Browser",

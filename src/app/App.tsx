@@ -1515,6 +1515,9 @@ export function App() {
   useEffect(() => {
     if (!isDesktop) return undefined;
     const handleFunctionKeys = (event: KeyboardEvent) => {
+      // Holding F11 repeats the key; each repeat flipped fullscreen again and
+      // left the window in a half state.
+      if (event.repeat) return;
       if (event.key === 'F11') {
         event.preventDefault();
         toggleFullscreen();

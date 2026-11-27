@@ -100,7 +100,9 @@ function loadTabs(): BrowserTab[] {
       return {
         ...tab,
         pinned: tab.pinned === true,
-        viewUrl: tab.viewUrl ?? (external ? entry.url : undefined),
+        // Restore the page the tab is actually on. A saved viewUrl can be the
+        // URL the tab was opened with, which is stale after the user navigated.
+        viewUrl: external ? entry.url : undefined,
         isLoading: false,
         progress: 0,
         error: null,
@@ -659,7 +661,7 @@ export function useBrowser(options: UseBrowserOptions = {}) {
     const tab = tabsRef.current.find((item) => item.id === tabId);
     if (!tab) return;
     const currentEntry = tab.entries[tab.historyIndex];
-    if (currentEntry.url === url) return;
+    if (currentEntry.url === url && tab.viewUrl === url) return;
 
     setTabs((current) =>
       current.map((item) => {
@@ -669,7 +671,10 @@ export function useBrowser(options: UseBrowserOptions = {}) {
         const entries = item.entries.map((candidate, index) =>
           index === item.historyIndex ? { ...candidate, url, visitedAt: Date.now() } : candidate,
         );
-        return { ...item, entries };
+        // viewUrl is what the native surface is told to show and what a restart
+        // restores. Leaving it at the first URL made every relaunch open the
+        // page the tab started on instead of the page the user was reading.
+        return { ...item, entries, viewUrl: url };
       }),
     );
     if (!isIncognito && rememberHistoryRef.current) {
