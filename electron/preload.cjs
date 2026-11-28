@@ -169,6 +169,7 @@ contextBridge.exposeInMainWorld('lumaDesktop', {
   close: () => ipcRenderer.send('window:close'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
+  getFullscreenState: () => ipcRenderer.invoke('window:fullscreen-state'),
   printPage: (targetId) => ipcRenderer.invoke('page:print', targetId),
   savePagePdf: (targetId, suggestedName) => ipcRenderer.invoke('page:save-pdf', targetId, suggestedName),
   openDevTools: (targetId, bounds) => ipcRenderer.invoke('browser:open-devtools', targetId, bounds),

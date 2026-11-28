@@ -481,6 +481,7 @@ interface LumaDesktopApi {
   close: () => void;
   isMaximized: () => Promise<boolean>;
   toggleFullscreen: () => Promise<boolean>;
+  getFullscreenState: () => Promise<boolean>;
   printPage: (targetId: number) => Promise<{ success: boolean; reason: string }>;
   savePagePdf: (targetId: number, suggestedName: string) => Promise<{ canceled: boolean; failed?: boolean; filePath?: string }>;
   openDevTools: (targetId: number, bounds: LumaDevtoolsBounds) => Promise<boolean>;

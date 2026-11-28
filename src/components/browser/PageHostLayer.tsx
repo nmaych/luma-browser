@@ -16,6 +16,12 @@ interface PageHostLayerProps {
   insetRight?: number;
   /** A tab whose page is temporarily owned by a drag window. */
   suspendedTabId?: string | null;
+  /**
+   * Changes when the chrome is shown or hidden (fullscreen). The native view
+   * has to be re-measured in the same commit as that layout change; relying on
+   * the resize observer alone left it covering the toolbar now and then.
+   */
+  layoutToken?: string;
   pageZoom: number;
   pageFontSize: number;
   pageFontFamily: string;
@@ -81,6 +87,7 @@ export function PageHostLayer({
   insetTop = 0,
   insetRight = 0,
   suspendedTabId = null,
+  layoutToken = '',
   pageZoom,
   pageFontSize,
   pageFontFamily,
@@ -186,7 +193,7 @@ export function PageHostLayer({
       onHandleRef.current(tabId, null);
       void bridge.destroy(tabId, incognito);
     }
-  }, [activeTabId, incognito, liveTabs, measure, parked, suspendedTabId, syncPage, visible]);
+  }, [activeTabId, incognito, layoutToken, liveTabs, measure, parked, suspendedTabId, syncPage, visible]);
 
   useEffect(() => {
     layout();

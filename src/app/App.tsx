@@ -311,6 +311,24 @@ export function App() {
     return desktop.onFullscreenChange(setFullscreen);
   }, [desktop]);
 
+  // Belt and braces: while the UI believes the window is fullscreen, ask the
+  // main process for the real state now and then. A transition event that is
+  // missed (or a lagging isFullScreen() on Windows) used to leave the toolbar
+  // hidden over a normal window with no way to bring it back.
+  useEffect(() => {
+    if (!fullscreen || !desktop?.getFullscreenState) return undefined;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void desktop.getFullscreenState().then((actual) => {
+        if (active && typeof actual === 'boolean' && actual !== fullscreen) setFullscreen(actual);
+      }).catch(() => undefined);
+    }, 600);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [desktop, fullscreen]);
+
   // Overlays anchored to the hidden chrome would park the page behind a still
   // frame that nothing on screen can dismiss any more.
   const wasFullscreen = useRef(false);
@@ -2263,6 +2281,7 @@ export function App() {
               // the 6px strip its resize handle lives in needs to stay clear.
               insetRight={devtoolsOpen && showDesktopWeb ? DEVTOOLS_RESIZE_GUTTER : 0}
               suspendedTabId={draggingTabId}
+              layoutToken={fullscreen ? 'fullscreen' : 'window'}
               pageZoom={browser.preferences.webZoom}
               pageFontSize={browser.preferences.webFontSize}
               pageFontFamily={browser.preferences.webFontFamily}

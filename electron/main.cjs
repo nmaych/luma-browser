@@ -778,6 +778,20 @@ function destroyDevtoolsView(targetId) {
   }
 }
 
+/**
+ * `isFullScreen()` can lag behind the geometry on Windows — after leaving
+ * fullscreen it sometimes stays true for a moment, or for good on a frameless
+ * window. Treating that as "still fullscreen" kept the toolbar hidden over a
+ * normal window, so fullscreen only counts when the window also covers the
+ * display it sits on.
+ */
+function windowCoversDisplay(win) {
+  if (!win || win.isDestroyed() || !win.isFullScreen()) return false;
+  const bounds = win.getBounds();
+  const display = screen.getDisplayMatching(bounds).bounds;
+  return bounds.width >= display.width - 2 && bounds.height >= display.height - 2;
+}
+
 function createWindow({
   incognito = false,
   initialTab = null,
@@ -875,49 +889,58 @@ function createWindow({
    * Fullscreen is a page mode, not a window mode: the renderer hides the tab
    * strip and the toolbar so the web page itself fills the screen. It has to
    * know when the window really changed, which only these events report — the
-   * IPC call returns before Windows finishes the transition. The window also
-   * re-reports the settled state shortly after, because a toggle during the
-   * transition can swallow the event and leave the chrome hidden for good.
+   * IPC call returns before Windows finishes the transition.
+   *
+   * A single delayed report is not enough: the exit animation can take longer
+   * than any fixed timeout, and `isFullScreen()` lags behind the geometry. A
+   * short settle watcher keeps sending the *geometric* truth until it has been
+   * stable for four ticks (or four seconds), so the last message the renderer
+   * sees is always the state the window really ended in.
    */
-  const fullscreenTimers = [];
-  /**
-   * `isFullScreen()` can lag behind the geometry on Windows: after leaving
-   * fullscreen the flag sometimes stays true for a moment (or, with a
-   * frameless window, for good), which left the toolbar hidden over a normal
-   * window. Fullscreen only counts when the window really covers its display.
-   */
-  const isWindowFullscreen = () => {
-    if (win.isDestroyed() || !win.isFullScreen()) return false;
-    const bounds = win.getBounds();
-    const display = screen.getDisplayMatching(bounds).bounds;
-    return bounds.width >= display.width - 2 && bounds.height >= display.height - 2;
-  };
+  let fullscreenWatcher = null;
   const reportFullscreen = () => {
     if (win.isDestroyed()) return;
-    win.webContents.send('window:fullscreen', isWindowFullscreen());
+    win.webContents.send('window:fullscreen', windowCoversDisplay(win));
   };
-  const syncFullscreen = () => {
+  const stopFullscreenWatcher = () => {
+    if (fullscreenWatcher) clearInterval(fullscreenWatcher);
+    fullscreenWatcher = null;
+  };
+  const watchFullscreenSettle = () => {
+    stopFullscreenWatcher();
+    let last = null;
+    let stable = 0;
+    let ticks = 0;
     reportFullscreen();
-    for (const timer of fullscreenTimers) clearTimeout(timer);
-    fullscreenTimers.length = 0;
-    fullscreenTimers.push(setTimeout(reportFullscreen, 320), setTimeout(reportFullscreen, 1100));
+    fullscreenWatcher = setInterval(() => {
+      if (win.isDestroyed()) {
+        stopFullscreenWatcher();
+        return;
+      }
+      ticks += 1;
+      const value = windowCoversDisplay(win);
+      reportFullscreen();
+      if (value === last) stable += 1;
+      else {
+        stable = 0;
+        last = value;
+      }
+      if (stable >= 4 || ticks >= 20) stopFullscreenWatcher();
+    }, 200);
   };
-  win.on('enter-full-screen', syncFullscreen);
-  win.on('leave-full-screen', syncFullscreen);
+  win.on('enter-full-screen', watchFullscreenSettle);
+  win.on('leave-full-screen', watchFullscreenSettle);
   let resizeReportTimer = null;
   win.on('resize', () => {
-    // Geometry settles after the event; one debounced report catches a window
-    // that came back to its normal size while the renderer still hides the
-    // chrome, even if both fullscreen transitions were missed.
+    // The last resize of a transition can arrive before the bounds settle.
     if (resizeReportTimer) clearTimeout(resizeReportTimer);
     resizeReportTimer = setTimeout(() => {
       resizeReportTimer = null;
-      if (!win.isDestroyed() && !isWindowFullscreen()) reportFullscreen();
-    }, 160);
+      reportFullscreen();
+    }, 180);
   });
   win.on('closed', () => {
-    for (const timer of fullscreenTimers) clearTimeout(timer);
-    fullscreenTimers.length = 0;
+    stopFullscreenWatcher();
     if (resizeReportTimer) clearTimeout(resizeReportTimer);
   });
 
@@ -3324,6 +3347,12 @@ ipcMain.handle('app:versions', () => ({
 }));
 
 ipcMain.handle('window:is-maximized', (event) => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false);
+// The renderer polls this while it believes the window is fullscreen, so a
+// missed transition event cannot leave the toolbar hidden for good.
+ipcMain.handle('window:fullscreen-state', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return windowCoversDisplay(win);
+});
 
 /**
  * Bounds to put back after leaving fullscreen. A frameless window occasionally
