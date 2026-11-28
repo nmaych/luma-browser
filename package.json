@@ -1,7 +1,7 @@
 {
   "name": "luma-browser",
   "productName": "Luma Browser",
-  "version": "1.21.9",
+  "version": "1.21.10",
   "private": true,
   "description": "A lightweight standalone Electron web browser with real tabbed browsing.",
   "author": "Luma Browser",
@@ -61,7 +61,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "Luma Browser"
+      "shortcutName": "Luma Browser",
+      "include": "build/installer.nsh",
+      "allowElevation": false
     },
     "publish": [
       {

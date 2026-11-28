@@ -880,9 +880,21 @@ function createWindow({
    * transition can swallow the event and leave the chrome hidden for good.
    */
   const fullscreenTimers = [];
+  /**
+   * `isFullScreen()` can lag behind the geometry on Windows: after leaving
+   * fullscreen the flag sometimes stays true for a moment (or, with a
+   * frameless window, for good), which left the toolbar hidden over a normal
+   * window. Fullscreen only counts when the window really covers its display.
+   */
+  const isWindowFullscreen = () => {
+    if (win.isDestroyed() || !win.isFullScreen()) return false;
+    const bounds = win.getBounds();
+    const display = screen.getDisplayMatching(bounds).bounds;
+    return bounds.width >= display.width - 2 && bounds.height >= display.height - 2;
+  };
   const reportFullscreen = () => {
     if (win.isDestroyed()) return;
-    win.webContents.send('window:fullscreen', win.isFullScreen());
+    win.webContents.send('window:fullscreen', isWindowFullscreen());
   };
   const syncFullscreen = () => {
     reportFullscreen();
@@ -892,9 +904,21 @@ function createWindow({
   };
   win.on('enter-full-screen', syncFullscreen);
   win.on('leave-full-screen', syncFullscreen);
+  let resizeReportTimer = null;
+  win.on('resize', () => {
+    // Geometry settles after the event; one debounced report catches a window
+    // that came back to its normal size while the renderer still hides the
+    // chrome, even if both fullscreen transitions were missed.
+    if (resizeReportTimer) clearTimeout(resizeReportTimer);
+    resizeReportTimer = setTimeout(() => {
+      resizeReportTimer = null;
+      if (!win.isDestroyed() && !isWindowFullscreen()) reportFullscreen();
+    }, 160);
+  });
   win.on('closed', () => {
     for (const timer of fullscreenTimers) clearTimeout(timer);
     fullscreenTimers.length = 0;
+    if (resizeReportTimer) clearTimeout(resizeReportTimer);
   });
 
   // Web pages may only use http(s) or local files. System pages are never exposed to guests.
@@ -1654,6 +1678,9 @@ function attachPageFeatures(contents, { native = false } = {}) {
   // page keeps covering the desktop.
   contents.on('enter-html-full-screen', () => htmlFullscreenContents.add(contents.id));
   contents.on('leave-html-full-screen', () => htmlFullscreenContents.delete(contents.id));
+  // A navigation replaces the document, and the browser drops its fullscreen
+  // with it; clearing here keeps the F11 path from believing in a stale one.
+  contents.on('did-navigate', () => htmlFullscreenContents.delete(contents.id));
   contents.once('destroyed', () => htmlFullscreenContents.delete(contents.id));
   if (!native) {
     contents.once('destroyed', () => {
@@ -1932,9 +1959,22 @@ app.on('web-contents-created', (_event, contents) => {
             .map((id) => webContents.fromId(id))
             .find((item) => item && !item.isDestroyed() && hostContentsOf(item) === manager);
         if (owned) {
+          // Ask the page rather than trusting the cached flag: a fullscreen
+          // that ended without its event (navigation, a player closing itself)
+          // would otherwise make F11 a no-op forever, leaving the user stuck
+          // in window fullscreen with no toolbar.
           void owned
-            .executeJavaScript('document.fullscreenElement && document.exitFullscreen()', true)
-            .catch(() => undefined);
+            .executeJavaScript('Boolean(document.fullscreenElement)', true)
+            .then((isPageFullscreen) => {
+              if (isPageFullscreen) return owned.executeJavaScript('document.exitFullscreen()', true);
+              htmlFullscreenContents.delete(owned.id);
+              if (hostWindow && !hostWindow.isDestroyed()) toggleWindowFullscreen(hostWindow);
+              return null;
+            })
+            .catch(() => {
+              htmlFullscreenContents.delete(owned.id);
+              if (hostWindow && !hostWindow.isDestroyed()) toggleWindowFullscreen(hostWindow);
+            });
           return;
         }
         if (hostWindow) toggleWindowFullscreen(hostWindow);
